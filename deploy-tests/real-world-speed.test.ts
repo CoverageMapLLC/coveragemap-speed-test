@@ -53,7 +53,7 @@ function buildApplicationInfo(
   type: SpeedTestEngineApplicationInfo['type']
 ): SpeedTestEngineApplicationInfo {
   return {
-    id: 'a0000000-0000-4000-8000-00000000d3pl',
+    id: 'c0ffee00-0000-4000-8000-00000000cafe',
     name: 'CoverageMap Deploy Validation',
     version: process.env.COVERAGEMAP_VALIDATION_VERSION?.trim() || '1.0.0',
     organization: 'CoverageMap',

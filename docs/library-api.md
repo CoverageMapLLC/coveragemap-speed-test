@@ -140,7 +140,7 @@ interface SpeedTestEngineApplicationInfo {
 | `type` | `ApplicationType` | Yes | Runtime category. Use a value from `ApplicationType` or any descriptive string. |
 | `website` | `string \| null` | No | Canonical URL for the integration. |
 
-All required fields are validated as non-empty strings during construction. Invalid metadata fails fast before any network operation starts.
+All required fields are validated as non-empty strings during construction. `application.id` must be a canonical UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, hexadecimal). Examples in this documentation use a fixed demo UUID; `SpeedTestEngine` throws during construction if you pass that value — replace it with your own static UUID for your product (generate once and hard-code it). Invalid metadata fails fast before any network operation starts.
 
 **`ApplicationType`** values: `'web'`, `'backend'`, `'mobile'`, `'desktop'`, `'cli'`, `'serverless'`, `'other'`.
 

@@ -17,6 +17,7 @@ CoverageMap's speed-test library for browser and backend environments. Measures 
   - [Optional: Select Tests](#optional-select-tests)
   - [Optional: Overrides](#optional-overrides)
 - [Data Upload](#data-upload)
+- [Fair Use Policy](#fair-use-policy)
 - [Development](#development)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
@@ -111,6 +112,20 @@ Completed test results are uploaded to CoverageMap systems (`map.coveragemap.com
 
 If an upload fails, results are queued locally and retried automatically in the background on the next run.
 
+> **Disclaimer:** All speed test results produced by this library — including measurement data, device metadata, and application identity — are uploaded to and retained by CoverageMap. By using this library, you acknowledge that result data will be used by CoverageMap to power network quality mapping, coverage analytics, and related services on [coveragemap.com](https://coveragemap.com). Do not use this library in contexts where uploading network measurement data to a third party is not permitted.
+
+---
+
+## Fair Use Policy
+
+This library uses CoverageMap's speed-test infrastructure to run measurements. To keep the service available and performant for everyone, please observe the following:
+
+- **Automated or scheduled tests must run no more than once per hour per application.** Running tests more frequently than this is considered abusive and puts unnecessary load on shared infrastructure.
+- Tests should be initiated in response to a genuine need — user-triggered measurements, scheduled monitoring at a reasonable cadence, or one-off diagnostics. Do not use this library to benchmark or stress-test CoverageMap's servers.
+- Each application must provide accurate `application.id`, `application.name`, and `application.organization` metadata. Misrepresenting or omitting this information is a violation of fair use.
+
+**CoverageMap reserves the right to rate-limit or block any application ID that is found to be abusing the infrastructure.** If your application is blocked, contact us through the repository to discuss your use case.
+
 ---
 
 ## Development
@@ -136,8 +151,6 @@ A runnable React + Vite sample app is available in [`demos/react-vite`](./demos/
 | [Result Schema](./docs/result-schema.md) | Result payload type definitions |
 | [Backend Integration](./docs/backend-integration.md) | Node.js / server-side usage guide |
 | [Examples](./docs/examples.md) | Usage examples and recipes |
-| [Testing](./docs/testing.md) | Testing strategy and setup |
-| [Release Checklist](./docs/release.md) | Steps for publishing a new version |
 
 ---
 

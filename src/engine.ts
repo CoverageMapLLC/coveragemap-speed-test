@@ -31,7 +31,11 @@ import {
 } from './types/speed-test.js';
 import { getServerWsUrl } from './types/speed-server.js';
 import { CancellationToken, CancellationError } from './utils/cancellation.js';
-import { generateUUID } from './utils/uuid.js';
+import {
+  DOCUMENTED_DEMO_APPLICATION_UUID,
+  generateUUID,
+  isCanonicalUuidString,
+} from './utils/uuid.js';
 import {
   buildDeviceResult,
   configureDeviceInfo,
@@ -540,8 +544,20 @@ function normalizeAndValidateApplicationInfo(
     }
   }
 
+  const id = application.id.trim().toLowerCase();
+  if (!isCanonicalUuidString(id)) {
+    throw new Error(
+      'SpeedTestEngineOptions.application.id must be a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, hexadecimal)'
+    );
+  }
+  if (id === DOCUMENTED_DEMO_APPLICATION_UUID) {
+    throw new Error(
+      'SpeedTestEngineOptions.application.id must be your own static UUID for this integration, not the documentation example. Generate one and hard-code it in your app.'
+    );
+  }
+
   return {
-    id: application.id.trim(),
+    id,
     name: application.name.trim(),
     version: application.version.trim(),
     organization: application.organization.trim(),

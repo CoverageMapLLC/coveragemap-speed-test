@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const applicationMetadata = {
-  id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+  id: '9f8e7d6c-5b4a-4321-9fed-cba987654321',
   name: 'Engine Regression Harness',
   version: '1.0.0',
   organization: 'CoverageMap',
@@ -365,6 +365,35 @@ describe('engine regression', () => {
     expect(result.results.measurements.latency).toBe(10);
     expect(result.results.measurements.downloadSpeed).toBeNull();
     expect(result.results.measurements.uploadSpeed).toBe(60);
+  });
+
+  it('rejects application id that is not a UUID', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+
+    expect(
+      () =>
+        new SpeedTestEngine({
+          application: { ...applicationMetadata, id: 'not-a-uuid' },
+        })
+    ).toThrow(
+      'SpeedTestEngineOptions.application.id must be a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, hexadecimal)'
+    );
+  });
+
+  it('rejects the documentation demo application id', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+
+    expect(
+      () =>
+        new SpeedTestEngine({
+          application: {
+            ...applicationMetadata,
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          },
+        })
+    ).toThrow(
+      'SpeedTestEngineOptions.application.id must be your own static UUID for this integration, not the documentation example'
+    );
   });
 
   it('rejects invalid tests selection with no enabled tests', async () => {
