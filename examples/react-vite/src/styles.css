@@ -1,0 +1,76 @@
+:root {
+  color-scheme: light dark;
+  font-family: Inter, Segoe UI, Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.subtitle {
+  margin-top: -8px;
+  opacity: 0.8;
+}
+
+.card {
+  border: 1px solid #8884;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.controls {
+  display: grid;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+label {
+  display: grid;
+  gap: 8px;
+  max-width: 480px;
+}
+
+select,
+button {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #8885;
+  background: transparent;
+}
+
+.error {
+  color: #c62828;
+  margin: 0;
+}
+
+.metrics .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.metrics .grid > div {
+  border: 1px solid #8884;
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.metrics span {
+  font-size: 12px;
+  opacity: 0.7;
+}

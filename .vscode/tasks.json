@@ -1,0 +1,66 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "npm: install dependencies",
+      "type": "shell",
+      "command": "npm ci",
+      "problemMatcher": []
+    },
+    {
+      "label": "npm: lint",
+      "type": "npm",
+      "script": "lint",
+      "group": "test",
+      "problemMatcher": ["$eslint-stylish"]
+    },
+    {
+      "label": "npm: typecheck",
+      "type": "npm",
+      "script": "typecheck",
+      "group": "test",
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "npm: test",
+      "type": "npm",
+      "script": "test",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "npm: test (watch)",
+      "type": "npm",
+      "script": "test:watch",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "npm: test deploy",
+      "type": "npm",
+      "script": "test:deploy",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "npm: build",
+      "type": "npm",
+      "script": "build",
+      "group": "build",
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "npm: dev build watch",
+      "type": "npm",
+      "script": "dev",
+      "isBackground": true,
+      "problemMatcher": ["$tsc-watch"]
+    },
+    {
+      "label": "npm: verify package",
+      "dependsOrder": "sequence",
+      "dependsOn": ["npm: lint", "npm: typecheck", "npm: test", "npm: build"],
+      "problemMatcher": []
+    }
+  ]
+}
