@@ -24,6 +24,7 @@ body {
   border: 1px solid #8884;
   border-radius: 10px;
   padding: 16px;
+  background: color-mix(in oklab, canvas 95%, #4f7cff 5%);
 }
 
 .controls {
@@ -43,12 +44,60 @@ label {
   max-width: 480px;
 }
 
+.server-control {
+  max-width: 560px;
+}
+
+.label-title {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.server-select {
+  padding: 10px 42px 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #6f88ff66;
+  background:
+    linear-gradient(45deg, transparent 50%, #8fa1ff 50%) calc(100% - 18px) calc(50% - 2px) / 6px
+      6px no-repeat,
+    linear-gradient(135deg, #8fa1ff 50%, transparent 50%) calc(100% - 14px) calc(50% - 2px) / 6px
+      6px no-repeat,
+    color-mix(in oklab, canvas 97%, #4f7cff 3%);
+  appearance: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.server-select:focus {
+  outline: none;
+  border-color: #8fa1ff;
+  box-shadow: 0 0 0 3px #8fa1ff2f;
+}
+
+.server-note {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
 select,
 button {
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid #8885;
   background: transparent;
+}
+
+button {
+  transition: transform 0.15s ease, border-color 0.2s ease;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: #8fa1ff;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .error {
@@ -60,6 +109,22 @@ button {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
+}
+
+.metrics-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.live-pill {
+  font-size: 12px;
+  border: 1px solid #4caf5088;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #2e7d32;
+  background: #4caf5018;
 }
 
 .metrics .grid > div {
