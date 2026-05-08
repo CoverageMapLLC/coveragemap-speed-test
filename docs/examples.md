@@ -503,4 +503,4 @@ globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket;
 
 ## Full runnable app
 
-A complete React + Vite integration lives in [`examples/react-vite`](../examples/react-vite).
+A complete React + Vite integration lives in [`demos/react-vite`](../demos/react-vite).

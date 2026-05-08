@@ -123,7 +123,7 @@ npm run test:deploy # Live deploy-time validation against real servers
 npm run build       # Compile to dist/
 ```
 
-A runnable React + Vite sample app is available in [`examples/react-vite`](./examples/react-vite).
+A runnable React + Vite sample app is available in [`demos/react-vite`](./demos/react-vite).
 
 ---
 

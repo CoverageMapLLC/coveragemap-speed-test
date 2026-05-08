@@ -44,6 +44,6 @@ export default [
     },
   },
   {
-    ignores: ['dist/**', 'examples/**'],
+    ignores: ['dist/**', 'demos/**'],
   },
 ];
