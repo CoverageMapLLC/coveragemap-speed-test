@@ -267,7 +267,7 @@ const result: NetworkTestResultTestResults = await engine.run(servers[0]);
 
 ---
 
-### Server list without SpeedTestEngine
+### Speed Test Server List
 
 Use [`SpeedTestApiClient`](library-api.md#speedtestapiclient) when you only need discovery data (or connection metadata) and do not want to configure `SpeedTestEngine` application metadata. It calls the same Speed HTTP endpoints, applies the same 30‑minute server cache, and resolves location the same way: optional constructor `locationProvider` (or `setLocationProvider()` later), otherwise IP coordinates via `getConnectionInfo()`.
 
