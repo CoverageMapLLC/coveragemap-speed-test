@@ -1,7 +1,7 @@
 {
   "name": "@coveragemap/speed-test",
   "version": "0.1.0",
-  "description": "CoverageMap web speed test library",
+  "description": "CoverageMap.com speed test library",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -35,14 +35,14 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/coveragemap/coveragemap-speed-test.git"
+    "url": "https://github.com/CoverageMapLLC/coveragemap-speed-test.git"
   },
   "bugs": {
-    "url": "https://github.com/coveragemap/coveragemap-speed-test/issues"
+    "url": "https://github.com/CoverageMapLLC/coveragemap-speed-test/issues"
   },
-  "homepage": "https://github.com/coveragemap/coveragemap-speed-test#readme",
+  "homepage": "https://github.com/CoverageMapLLC/coveragemap-speed-test#readme",
   "author": "CoverageMap",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "ua-parser-js": "^2.0.9"
   },
