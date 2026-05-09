@@ -12,6 +12,7 @@ jobs:
     name: Publish @coveragemap/speed-test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: Production
 
     permissions:
       contents: read
@@ -41,5 +42,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Show publish tool versions
+        run: |
+          node -v
+          npm -v
+
       - name: Publish package
-        run: npm publish --access public
+        run: npm publish --access public --provenance --loglevel verbose
