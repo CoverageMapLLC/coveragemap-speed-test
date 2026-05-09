@@ -32,39 +32,14 @@ jobs:
           ref: main
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
-          cache: npm
+          node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Read package metadata
-        id: package
-        run: |
-          PACKAGE_NAME=$(node -p 'require("./package.json").name')
-          PACKAGE_VERSION=$(node -p 'require("./package.json").version')
-          {
-            echo "name=${PACKAGE_NAME}"
-            echo "version=${PACKAGE_VERSION}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Check if version already exists on npm
-        id: version_check
-        run: |
-          PACKAGE_NAME="${{ steps.package.outputs.name }}"
-          PACKAGE_VERSION="${{ steps.package.outputs.version }}"
-
-          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "Version ${PACKAGE_NAME}@${PACKAGE_VERSION} already exists on npm. Skipping publish."
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "Publishing ${PACKAGE_NAME}@${PACKAGE_VERSION} to npm."
-          fi
-
       - name: Publish package
-        if: steps.version_check.outputs.publish == 'true'
         run: npm publish --access public
