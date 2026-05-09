@@ -22,6 +22,7 @@ import { SpeedTestEngine } from '@coveragemap/speed-test';
   - [SpeedTestSelection](#speedtestselection)
   - [SpeedTestLocation](#speedtestlocation)
   - [SpeedTestLocationProvider](#speedtestlocationprovider)
+  - [SpeedTestNetworkProvider](#speedtestnetworkprovider)
 - [Callbacks](#callbacks)
   - [SpeedTestCallbacks](#speedtestcallbacks)
   - [SpeedTestStage](#speedteststage)
@@ -42,9 +43,11 @@ import { SpeedTestEngine } from '@coveragemap/speed-test';
   - [NetworkTestResultTestType](#networktestresulttesttype)
   - [NetworkTestResultResults](#networktestresultresults)
   - [NetworkTestResultLocation](#networktestresultlocation)
+  - [NetworkTestResultCellularInfo](#networktestresultcellularinfo)
   - [NetworkTestResultMeasurements](#networktestresultmeasurements)
   - [NetworkTestResultSpeedTimePair](#networktestresultspeedtimepair)
   - [NetworkTestResultStage](#networktestresultstage)
+  - [NetworkTestResultBandInfo](#networktestresultbandinfo)
   - [NetworkTestResultWiFiInfo](#networktestresultwifiinfo)
   - [NetworkTestResultWiredInfo](#networktestresultwiredinfo)
   - [BrowserInfo](#browserinfo)
@@ -100,7 +103,6 @@ interface SpeedTestEngineOptions {
   callbacks?: SpeedTestCallbacks;
   api?: ApiBaseUrlOverrides;
   deviceInfo?: DeviceInfoConfigOverrides;
-  locationProvider?: SpeedTestLocationProvider | null;
 }
 ```
 
@@ -112,7 +114,8 @@ interface SpeedTestEngineOptions {
 | `callbacks` | `SpeedTestCallbacks` | No | Event handlers for stage changes, measurement progress, and completion. |
 | `api` | `ApiBaseUrlOverrides` | No | Optional Speed API and CoverageMap ingestion base URLs. Omitted properties use the library’s default hosts. |
 | `deviceInfo` | `DeviceInfoConfigOverrides` | No | Controls how device identity and host telemetry are populated in the result payload. |
-| `locationProvider` | `SpeedTestLocationProvider \| null` | No | Callback used to fetch current coordinates for server discovery and result location. If omitted or if it returns `null`, the engine falls back to `getConnectionInfo()` coordinates. |
+
+Providers are registered after construction via dedicated methods: [`setLocationProvider()`](#setlocationprovider), [`setNetworkProvider()`](#setnetworkprovider), and [`setDeviceMetadataProvider()`](#setdevicemetadataprovider).
 
 ---
 
@@ -274,6 +277,20 @@ Updates the active location provider at runtime. Pass `null` to disable custom c
 
 ---
 
+#### `setNetworkProvider(provider)`
+
+```ts
+setNetworkProvider(provider: SpeedTestNetworkProvider | null): void
+```
+
+Updates the active network provider at runtime. Pass `null` to use default runtime-derived network metadata only.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `provider` | `SpeedTestNetworkProvider \| null` | Yes | Provider callback applied to subsequent `run()` calls for `connectionType`, `cellular`, `wifi`, and `wired` payload fields. |
+
+---
+
 ## Configuration
 
 ### SpeedTestConfig
@@ -366,6 +383,44 @@ type SpeedTestLocationProvider = (context: SpeedTestLocationProviderContext) =>
 ```
 
 Return `null` when live location is unavailable so the engine can fall back to the default provider (IP lookup from `connectionInfo`).
+
+---
+
+### SpeedTestNetworkProvider
+
+Callback type used by `SpeedTestEngineOptions.networkProvider` and `setNetworkProvider()`.
+
+```ts
+interface SpeedTestNetworkSnapshot {
+  connectionType: ConnectionType;
+  cellular: NetworkTestResultCellularInfo | null;
+  wifi: NetworkTestResultWiFiInfo | null;
+  wired: NetworkTestResultWiredInfo | null;
+}
+
+interface SpeedTestNetworkProviderContext {
+  connectionInfo: ConnectionInfo | null;
+  connectionType: ConnectionType;
+  effectiveType: string | null;
+  downlinkMbps: number | null;
+  rttMs: number | null;
+  saveDataEnabled: boolean;
+}
+
+interface SpeedTestNetworkOverrides {
+  connectionType?: ConnectionType | null;
+  cellular?: Partial<NetworkTestResultCellularInfo> | null;
+  wifi?: Partial<NetworkTestResultWiFiInfo> | null;
+  wired?: Partial<NetworkTestResultWiredInfo> | null;
+}
+
+type SpeedTestNetworkProvider = (context: SpeedTestNetworkProviderContext) =>
+  | SpeedTestNetworkOverrides
+  | null
+  | Promise<SpeedTestNetworkOverrides | null>;
+```
+
+Provider output is merged onto the default runtime-derived snapshot. This enables overriding only specific network fields while preserving the rest of the payload.
 
 ---
 
@@ -1062,13 +1117,10 @@ const client = new SpeedTestApiClient();
 **Constructor**
 
 ```ts
-new SpeedTestApiClient(
-  overrides?: ApiBaseUrlOverrides,
-  locationProvider?: SpeedTestLocationProvider | null
-)
+new SpeedTestApiClient(overrides?: ApiBaseUrlOverrides)
 ```
 
-Omitted `overrides` properties fall back to the library’s default production base URLs. Pass a `locationProvider` when coordinates should not be inferred from `getConnectionInfo()`.
+Omitted `overrides` properties fall back to the library’s default production base URLs. Call `setLocationProvider()` after construction to supply a custom location source for server discovery.
 
 #### `getServers()`
 
@@ -1076,7 +1128,7 @@ Omitted `overrides` properties fall back to the library’s default production b
 getServers(): Promise<SpeedTestServer[]>
 ```
 
-Returns the filtered server inventory (premium servers excluded). Results are cached for 30 minutes; subsequent calls within that window return the cached list when location has not changed. Location is resolved from the configured `locationProvider`, then falls back to `getConnectionInfo()` coordinates. Throws on HTTP errors or malformed responses.
+Returns the filtered server inventory (premium servers excluded). Results are cached for 30 minutes; subsequent calls within that window return the cached list when location has not changed. Location is resolved from the provider registered via `setLocationProvider()`, then falls back to `getConnectionInfo()` coordinates. Throws on HTTP errors or malformed responses.
 
 #### `refreshServers()`
 
@@ -1139,7 +1191,6 @@ interface DeviceMetadataProvider {
   parseBrowserInfo(): ParsedBrowserInfo;
   parseOSInfo(): ParsedOSInfo;
   getConnectionType(): ConnectionType;
-  getNetworkInfo(): NetworkInfo;
   getBrowserInfo(): BrowserInfo;
   buildDeviceResult(config: DeviceMetadataProviderConfig): NetworkTestResultDevice;
 }
@@ -1152,7 +1203,6 @@ interface DeviceMetadataProvider {
 | `parseBrowserInfo()` | `ParsedBrowserInfo` | Parses browser name, version, and engine. |
 | `parseOSInfo()` | `ParsedOSInfo` | Parses OS name and version. |
 | `getConnectionType()` | `ConnectionType` | Detects connection type. |
-| `getNetworkInfo()` | `NetworkInfo` | Returns network quality indicators. |
 | `getBrowserInfo()` | `BrowserInfo` | Returns full browser fingerprint. |
 | `buildDeviceResult(config)` | `NetworkTestResultDevice` | Assembles the complete device metadata payload. |
 
@@ -1370,6 +1420,7 @@ Generates a UUID v4 string using `crypto.randomUUID()` when available, with a fa
 
 ## See also
 
+- [Providers](./providers.md) — In-depth reference for `SpeedTestLocationProvider`, `SpeedTestNetworkProvider`, and `DeviceMetadataProvider` — context fields, merge semantics, RF signal field tables, and custom implementation guide
 - [Protocol](./protocol.md) — WebSocket message framing and stage wire protocol
 - [Result Schema](./result-schema.md) — Full result payload field reference
 - [Examples](./examples.md) — Integration examples for browser, Node.js, and serverless

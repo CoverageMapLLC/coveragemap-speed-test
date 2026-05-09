@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   uploadSpeedMock: vi.fn(),
   getServerListMock: vi.fn(),
   getConnectionInfoMock: vi.fn(),
+  setLocationProviderMock: vi.fn(),
   uploadResultsMock: vi.fn(),
   speedApiCtorArgs: [] as unknown[],
   coverageMapApiCtorArgs: [] as unknown[],
@@ -45,6 +46,7 @@ vi.mock('../src/api/speed-api.js', () => ({
     }
     getServers = mocks.getServerListMock;
     getConnectionInfo = mocks.getConnectionInfoMock;
+    setLocationProvider = mocks.setLocationProviderMock;
   },
 }));
 vi.mock('../src/api/coveragemap-api.js', () => ({
@@ -418,7 +420,7 @@ describe('engine regression', () => {
       application: applicationMetadata,
     });
 
-    expect(mocks.speedApiCtorArgs[0]).toEqual([undefined, null]);
+    expect(mocks.speedApiCtorArgs[0]).toEqual([undefined]);
     expect(mocks.coverageMapApiCtorArgs[0]).toEqual([undefined]);
   });
 
@@ -437,7 +439,6 @@ describe('engine regression', () => {
         speedApiBaseUrl: 'https://speed.internal.example',
         coverageMapApiBaseUrl: 'https://map.internal.example',
       },
-      null,
     ]);
     expect(mocks.coverageMapApiCtorArgs[0]).toEqual([
       {
@@ -512,9 +513,14 @@ describe('engine regression', () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
 
     let releaseLatency: () => void = () => {};
+    let markLatencyStarted: () => void = () => {};
+    const latencyStarted = new Promise<void>((resolve) => {
+      markLatencyStarted = resolve;
+    });
     mocks.latencyMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
+          markLatencyStarted();
           releaseLatency = () =>
             resolve({
               latencies: [10, 11, 12],
@@ -547,8 +553,9 @@ describe('engine regression', () => {
     };
 
     const runPromise = engine.run(server);
+    await latencyStarted;
+    expect(engine.isRunning).toBe(true);
     await expect(engine.run(server)).rejects.toThrow('Speed test is already running');
-
     releaseLatency();
     await runPromise;
   });
@@ -602,4 +609,95 @@ describe('engine regression', () => {
       website: 'https://coveragemap.com',
     });
   });
+
+  it('applies setNetworkProvider overrides to stages and final results', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    engine.setNetworkProvider({
+      getConnectionType: () => 'wifi',
+      getWifiMetadata: () => ({ ssidName: 'CoverageMap-Lab', channelNumber: 11 }),
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.results.connectionType).toBe('wifi');
+    expect(result.results.wifi).toMatchObject({
+      ispName: 'CoverageMap ISP',
+      ssidName: 'CoverageMap-Lab',
+      channelNumber: 11,
+    });
+    expect(result.results.cellular).toBeNull();
+    expect(result.results.wired).toBeNull();
+    expect(result.stages?.[0]).toMatchObject({
+      connectionType: 'wifi',
+      wifi: { ssidName: 'CoverageMap-Lab' },
+      cellular: null,
+      wired: null,
+    });
+  });
+
+  it('removes network provider overrides when setNetworkProvider(null) is called', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    engine.setNetworkProvider({
+      getConnectionType: () => 'mobile',
+      getCellularMetadata: () => ({ carrierName: 'Test Carrier' }),
+    });
+    engine.setNetworkProvider(null);
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // After clearing, the engine falls back to default detection (unknown in jsdom)
+    expect(result.results.connectionType).not.toBe('mobile');
+  });
+
+  it('forwards setLocationProvider to the API client for server discovery', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const locationProvider = vi.fn().mockResolvedValue({ latitude: 51.5, longitude: -0.1 });
+    engine.setLocationProvider(locationProvider);
+
+    expect(mocks.setLocationProviderMock).toHaveBeenCalledWith(locationProvider);
+  });
+
+  it('clears location provider when setLocationProvider(null) is called', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const locationProvider = vi.fn().mockResolvedValue({ latitude: 51.5, longitude: -0.1 });
+    engine.setLocationProvider(locationProvider);
+    engine.setLocationProvider(null);
+
+    expect(mocks.setLocationProviderMock).toHaveBeenLastCalledWith(null);
+  });
+
 });

@@ -1,6 +1,5 @@
 import type {
   BrowserInfo,
-  ConnectionType,
   NetworkTestResultApplicationInfo,
   NetworkTestResultDevice,
 } from '../types/test-results.js';
@@ -9,7 +8,6 @@ import {
   type CoreSystemOverrides,
   type DeviceMetadataProvider,
   type DeviceMetadataProviderConfig,
-  type NetworkInfo,
   type ParsedBrowserInfo,
   type ParsedOSInfo,
 } from './device-metadata-provider.js';
@@ -95,14 +93,6 @@ export function parseOSInfo(): ParsedOSInfo {
   return deviceMetadataProvider.parseOSInfo();
 }
 
-export function getConnectionType(): ConnectionType {
-  return deviceMetadataProvider.getConnectionType();
-}
-
-export function getNetworkInfo(): NetworkInfo {
-  return deviceMetadataProvider.getNetworkInfo();
-}
-
 export function getBrowserInfo(): BrowserInfo {
   return deviceMetadataProvider.getBrowserInfo();
 }
@@ -115,7 +105,6 @@ export type {
   CoreSystemOverrides,
   DeviceMetadataProvider,
   DeviceMetadataProviderConfig,
-  NetworkInfo,
   ParsedBrowserInfo,
   ParsedOSInfo,
 };

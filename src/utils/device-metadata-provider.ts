@@ -1,7 +1,6 @@
 import { UAParser } from 'ua-parser-js';
 import type {
   BrowserInfo,
-  ConnectionType,
   DeviceOS,
   NetworkTestResultApplicationInfo,
   NetworkTestResultCoreSystemInfo,
@@ -45,21 +44,11 @@ export interface ParsedOSInfo {
   osVersion: string;
 }
 
-export interface NetworkInfo {
-  connectionType: ConnectionType;
-  effectiveType: string | null;
-  downlink: number | null;
-  rtt: number | null;
-  saveData: boolean;
-}
-
 export interface DeviceMetadataProvider {
   reset(): void;
   getDeviceId(config: DeviceMetadataProviderConfig): string;
   parseBrowserInfo(): ParsedBrowserInfo;
   parseOSInfo(): ParsedOSInfo;
-  getConnectionType(): ConnectionType;
-  getNetworkInfo(): NetworkInfo;
   getBrowserInfo(): BrowserInfo;
   buildDeviceResult(config: DeviceMetadataProviderConfig): NetworkTestResultDevice;
 }
@@ -136,55 +125,6 @@ export class DefaultDeviceMetadataProvider implements DeviceMetadataProvider {
     return {
       osName: os.name ?? 'Unknown',
       osVersion: os.version ?? '',
-    };
-  }
-
-  getConnectionType(): ConnectionType {
-    if (this.getRuntimeType() !== 'browser') {
-      return 'unknown';
-    }
-
-    const nav = this.getNavigatorSafe();
-    const connection = this.getNavigatorConnection();
-
-    if (connection?.type) {
-      switch (connection.type) {
-        case 'wifi':
-          return 'wifi';
-        case 'ethernet':
-          return 'ethernet';
-        case 'cellular':
-          return 'mobile';
-        case 'bluetooth':
-          return 'bluetooth';
-        case 'none':
-          return 'none';
-      }
-    }
-
-    const parser = this.getParser();
-    const deviceType = parser?.getDevice().type;
-    const isMobile = deviceType === 'mobile' || deviceType === 'tablet';
-
-    if (!isMobile && nav?.onLine !== false) {
-      return 'wifi';
-    }
-
-    if (isMobile && connection?.effectiveType) {
-      return 'wifi';
-    }
-
-    return 'unknown';
-  }
-
-  getNetworkInfo(): NetworkInfo {
-    const connection = this.getNavigatorConnection();
-    return {
-      connectionType: this.getConnectionType(),
-      effectiveType: connection?.effectiveType ?? null,
-      downlink: connection?.downlink ?? null,
-      rtt: connection?.rtt ?? null,
-      saveData: connection?.saveData ?? false,
     };
   }
 

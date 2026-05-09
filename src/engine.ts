@@ -6,8 +6,6 @@ import type {
   NetworkTestResultTestResults,
   NetworkTestResultResults,
   NetworkTestResultLocation,
-  NetworkTestResultWiFiInfo,
-  NetworkTestResultWiredInfo,
   NetworkTestResultStage,
 } from './types/test-results.js';
 import type {
@@ -22,6 +20,7 @@ import type {
 import type {
   SpeedTestLocationProvider,
 } from './types/location-provider.js';
+import type { SpeedTestNetworkProvider } from './types/network-provider.js';
 import {
   DEFAULT_CONFIG,
   getDownloadMessageSizeKb,
@@ -39,10 +38,14 @@ import {
 import {
   buildDeviceResult,
   configureDeviceInfo,
-  getConnectionType,
   type DeviceInfoConfigOverrides,
 } from './utils/device-info.js';
 import { resolveSpeedTestLocation } from './utils/location-provider.js';
+import {
+  getNetworkInfo,
+  resolveSpeedTestNetwork,
+  type ResolvedSpeedTestNetwork,
+} from './utils/network-provider.js';
 import { runLatencyTest } from './tests/latency-test.js';
 import { runDownloadEstimationTest } from './tests/download-estimation-test.js';
 import { runUploadEstimationTest } from './tests/upload-estimation-test.js';
@@ -70,7 +73,6 @@ export interface SpeedTestEngineOptions {
   callbacks?: SpeedTestCallbacks;
   api?: ApiBaseUrlOverrides;
   deviceInfo?: DeviceInfoConfigOverrides;
-  locationProvider?: SpeedTestLocationProvider | null;
 }
 
 export class SpeedTestEngine {
@@ -85,17 +87,19 @@ export class SpeedTestEngine {
   private _isRunning = false;
   private sessionId: string;
   private locationProvider: SpeedTestLocationProvider | null;
+  private networkProvider: SpeedTestNetworkProvider | null;
 
   constructor(options: SpeedTestEngineOptions) {
     const application = normalizeAndValidateApplicationInfo(options.application);
     this.config = normalizeAndValidateConfig(options.config);
     this.tests = normalizeAndValidateTestSelection(options.tests);
     this.callbacks = options.callbacks ?? {};
-    this.speedApi = new SpeedTestApiClient(options.api, options.locationProvider ?? null);
+    this.speedApi = new SpeedTestApiClient(options.api);
     this.coverageMapApi = new CoverageMapApiClient(options.api);
     this.queueStorageKey = DEFAULT_RESULTS_QUEUE_KEY;
     this.sessionId = generateUUID();
-    this.locationProvider = options.locationProvider ?? null;
+    this.locationProvider = null;
+    this.networkProvider = null;
     configureDeviceInfo({
       ...options.deviceInfo,
       application,
@@ -117,6 +121,10 @@ export class SpeedTestEngine {
   setLocationProvider(provider: SpeedTestLocationProvider | null): void {
     this.locationProvider = provider;
     this.speedApi.setLocationProvider(provider);
+  }
+
+  setNetworkProvider(provider: SpeedTestNetworkProvider | null): void {
+    this.networkProvider = provider;
   }
 
   async getServers(): Promise<SpeedTestServer[]> {
@@ -174,6 +182,7 @@ export class SpeedTestEngine {
     try {
       connectionInfo = await this.getConnectionInfo();
       location = await this.acquireLocation(connectionInfo);
+      const network = await this.acquireNetwork(connectionInfo);
       if (typeof server === 'string') {
         targetServer = await this.resolveServerById(server);
       } else if (!targetServer) {
@@ -184,13 +193,14 @@ export class SpeedTestEngine {
       const buildStage = (testStage: string): NetworkTestResultStage => ({
         testStage,
         dateTime: new Date().toISOString(),
-        connectionType: getConnectionType(),
+        connectionType: network.connectionType,
         localIpAddress: null,
         externalIpAddress: connectionInfo?.client?.ip ?? null,
         vpnEnabled: false,
         location,
-        wifi: this.buildWifiInfo(connectionInfo),
-        wired: this.buildWiredInfo(connectionInfo),
+        cellular: network.cellular,
+        wifi: network.wifi,
+        wired: network.wired,
       });
 
       try {
@@ -292,6 +302,7 @@ export class SpeedTestEngine {
         server: targetServer,
         connectionInfo,
         location,
+        network,
         latencyData,
         downloadEstimation,
         downloadResult,
@@ -372,20 +383,11 @@ export class SpeedTestEngine {
     };
   }
 
-  private buildWifiInfo(connectionInfo: ConnectionInfo | null): NetworkTestResultWiFiInfo | null {
-    const connType = getConnectionType();
-    if (connType !== 'wifi') return null;
-    return {
-      ispName: connectionInfo?.client?.asOrg ?? null,
-    };
-  }
-
-  private buildWiredInfo(connectionInfo: ConnectionInfo | null): NetworkTestResultWiredInfo | null {
-    const connType = getConnectionType();
-    if (connType === 'wifi') return null;
-    return {
-      ispName: connectionInfo?.client?.asOrg ?? null,
-    };
+  private async acquireNetwork(connectionInfo: ConnectionInfo | null): Promise<ResolvedSpeedTestNetwork> {
+    return resolveSpeedTestNetwork(this.networkProvider, {
+      connectionInfo,
+      connectionType: getNetworkInfo(),
+    });
   }
 
   private mapStageToTestStage(stage: SpeedTestStage): string | null {
@@ -409,6 +411,7 @@ export class SpeedTestEngine {
     server: SpeedTestServer;
     connectionInfo: ConnectionInfo | null;
     location: NetworkTestResultLocation | null;
+    network: ResolvedSpeedTestNetwork;
     latencyData: LatencyTestData | null;
     downloadEstimation: SpeedEstimationResult | null;
     downloadResult: SpeedTestData | null;
@@ -423,19 +426,19 @@ export class SpeedTestEngine {
     failedStage: string | null;
   }): NetworkTestResultTestResults {
     const device = buildDeviceResult();
-    const connType = getConnectionType();
 
     const results: NetworkTestResultResults = {
       dateTime: new Date().toISOString(),
-      connectionType: connType,
+      connectionType: params.network.connectionType,
       localIpAddress: null,
       externalIpAddress: params.connectionInfo?.client?.ip ?? null,
       vpnEnabled: false,
       testStatus: params.failedStage ? 'failed' : 'passed',
       location: params.location,
       server: params.server,
-      wifi: this.buildWifiInfo(params.connectionInfo),
-      wired: this.buildWiredInfo(params.connectionInfo),
+      cellular: params.network.cellular,
+      wifi: params.network.wifi,
+      wired: params.network.wired,
       measurements: {
         dateTime: params.startTime.toISOString(),
         downloadSpeed: params.downloadResult?.speedMbps ?? null,

@@ -18,12 +18,8 @@ export class SpeedTestApiClient {
   private serverCacheLocation: SpeedTestLocationCoordinates | null = null;
   private locationProvider: SpeedTestLocationProvider | null = null;
 
-  constructor(
-    overrides?: ApiBaseUrlOverrides,
-    locationProvider?: SpeedTestLocationProvider | null
-  ) {
+  constructor(overrides?: ApiBaseUrlOverrides) {
     this.baseUrl = getSpeedApiBaseUrl(overrides);
-    this.locationProvider = locationProvider ?? null;
   }
 
   setLocationProvider(provider: SpeedTestLocationProvider | null): void {

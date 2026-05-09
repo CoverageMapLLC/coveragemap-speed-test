@@ -100,6 +100,7 @@ const engine = new SpeedTestEngine({
 |---|---|
 | `tests.latency` / `tests.download` / `tests.upload` | Toggle individual test phases |
 | `locationProvider` | Live coordinates provider; falls back to `getConnectionInfo()` when `null` |
+| `networkProvider` | Overrides resolved connection type and cellular/Wi-Fi/wired metadata used in `results` + `stages` |
 | `deviceInfo.deviceIdStorageKey` | Custom storage key for the persistent device ID |
 | `deviceInfo.coreSystem` | Host/runtime/system overrides for backend runners |
 | `setDeviceMetadataProvider()` | Register a custom runtime metadata adapter |

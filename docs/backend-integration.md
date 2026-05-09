@@ -379,6 +379,7 @@ Browser-specific fields (`device.browser`, `device.os`, connection type from the
 ## Related docs
 
 - [Library API](./library-api.md)
+- [Providers](./providers.md) — `CoreSystemOverrides`, `DeviceMetadataProvider`, and custom provider implementations
 - [Protocol](./protocol.md)
 - [Result Schema](./result-schema.md)
 - [Examples](./examples.md)

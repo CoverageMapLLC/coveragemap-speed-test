@@ -181,6 +181,7 @@ interface NetworkTestResultResults {
   testStatus: TestStatus;
   location: NetworkTestResultLocation | null;
   server: SpeedTestServer | null;
+  cellular: NetworkTestResultCellularInfo | null;
   wifi: NetworkTestResultWiFiInfo | null;
   wired: NetworkTestResultWiredInfo | null;
   measurements: NetworkTestResultMeasurements;
@@ -219,19 +220,54 @@ interface NetworkTestResultLocation {
 }
 ```
 
-### `results.wifi` and `results.wired`
+### `results.cellular`, `results.wifi`, and `results.wired`
 
 ```ts
+interface NetworkTestResultCellularInfo {
+  technology: string | null;
+  mccCode: string | null;
+  mncCode: string | null;
+  countryIso: string | null;
+  carrierName: string | null;
+  provider: string | null;
+  isRoaming: boolean | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  rssi: number | null;
+  sinr: number | null;
+  primaryBand: NetworkTestResultBandInfo | null;
+  secondaryBands: NetworkTestResultBandInfo[] | null;
+}
+
+interface NetworkTestResultBandInfo {
+  bandNumber: number;
+  bandwidth: number;
+  technology: string | null;
+}
+
 interface NetworkTestResultWiFiInfo {
+  ssidName: string | null;
+  bssid: string | null;
   ispName: string | null;
+  wifiStandard: string | null;
+  txRate: number | null;
+  rxRate: number | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  rssi: number | null;
+  sinr: number | null;
+  noise: number | null;
+  channelNumber: number | null;
 }
 
 interface NetworkTestResultWiredInfo {
   ispName: string | null;
+  macAddress: string | null;
+  dataLink: number | null;
 }
 ```
 
-`wifi` is populated when the connection is Wi-Fi; `wired` for non–Wi-Fi paths. Both may be null depending on runtime.
+`cellular`, `wifi`, and `wired` are mutually exclusive in default resolution (`mobile`, `wifi`, or non-wireless fallback), but a custom `networkProvider` can override this behavior and set whichever blocks are needed.
 
 ### `results.measurements`
 
@@ -273,6 +309,7 @@ interface NetworkTestResultStage {
   externalIpAddress: string | null;
   vpnEnabled: boolean | null;
   location: NetworkTestResultLocation | null;
+  cellular: NetworkTestResultCellularInfo | null;
   wifi: NetworkTestResultWiFiInfo | null;
   wired: NetworkTestResultWiredInfo | null;
 }
@@ -309,4 +346,5 @@ When new fields are added:
 See also:
 
 - [Library API](./library-api.md)
+- [Providers](./providers.md) — How `cellular`, `wifi`, and `wired` blocks are populated and overridden
 - [Protocol](./protocol.md)
