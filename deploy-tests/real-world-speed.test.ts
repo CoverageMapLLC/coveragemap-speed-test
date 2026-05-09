@@ -53,7 +53,7 @@ function buildApplicationInfo(
   type: SpeedTestEngineApplicationInfo['type']
 ): SpeedTestEngineApplicationInfo {
   return {
-    id: 'a0000000-0000-4000-8000-00000000d3pl',
+    id: 'c0ffee00-0000-4000-8000-00000000cafe',
     name: 'CoverageMap Deploy Validation',
     version: process.env.COVERAGEMAP_VALIDATION_VERSION?.trim() || '1.0.0',
     organization: 'CoverageMap',
@@ -185,11 +185,12 @@ describe.sequential('post-deploy real-world validation', () => {
       expect(result.results.testStatus).toBe('passed');
       expect(result.results.measurements.downloadSpeed).toBeNull();
       expect((result.results.measurements.uploadSpeed ?? 0)).toBeGreaterThan(0);
-      expect(result.results.measurements.latency).toBeNull();
+      expect((result.results.measurements.latency ?? 0)).toBeGreaterThan(0);
 
       testSummary.push({
         scenario,
         uploadMbps: result.results.measurements.uploadSpeed,
+        latencyMs: result.results.measurements.latency,
         status: result.results.testStatus,
       });
     },

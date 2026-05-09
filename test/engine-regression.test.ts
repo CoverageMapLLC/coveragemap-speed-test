@@ -10,13 +10,14 @@ const mocks = vi.hoisted(() => ({
   uploadSpeedMock: vi.fn(),
   getServerListMock: vi.fn(),
   getConnectionInfoMock: vi.fn(),
+  setLocationProviderMock: vi.fn(),
   uploadResultsMock: vi.fn(),
   speedApiCtorArgs: [] as unknown[],
   coverageMapApiCtorArgs: [] as unknown[],
 }));
 
 const applicationMetadata = {
-  id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+  id: '9f8e7d6c-5b4a-4321-9fed-cba987654321',
   name: 'Engine Regression Harness',
   version: '1.0.0',
   organization: 'CoverageMap',
@@ -45,6 +46,7 @@ vi.mock('../src/api/speed-api.js', () => ({
     }
     getServers = mocks.getServerListMock;
     getConnectionInfo = mocks.getConnectionInfoMock;
+    setLocationProvider = mocks.setLocationProviderMock;
   },
 }));
 vi.mock('../src/api/coveragemap-api.js', () => ({
@@ -143,6 +145,7 @@ describe('engine regression', () => {
     expect(result.results.measurements.downloadSpeed).toBe(120);
     expect(result.results.measurements.uploadSpeed).toBe(60);
     expect(result.results.measurements.failedReason).toBeNull();
+    expect(result.results.ispName).toBe('CoverageMap ISP');
     expect(mocks.uploadResultsMock).toHaveBeenCalledTimes(1);
   });
 
@@ -367,6 +370,35 @@ describe('engine regression', () => {
     expect(result.results.measurements.uploadSpeed).toBe(60);
   });
 
+  it('rejects application id that is not a UUID', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+
+    expect(
+      () =>
+        new SpeedTestEngine({
+          application: { ...applicationMetadata, id: 'not-a-uuid' },
+        })
+    ).toThrow(
+      'SpeedTestEngineOptions.application.id must be a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, hexadecimal)'
+    );
+  });
+
+  it('rejects the documentation demo application id', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+
+    expect(
+      () =>
+        new SpeedTestEngine({
+          application: {
+            ...applicationMetadata,
+            id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          },
+        })
+    ).toThrow(
+      'SpeedTestEngineOptions.application.id must be your own static UUID for this integration, not the documentation example'
+    );
+  });
+
   it('rejects invalid tests selection with no enabled tests', async () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
 
@@ -389,7 +421,7 @@ describe('engine regression', () => {
       application: applicationMetadata,
     });
 
-    expect(mocks.speedApiCtorArgs[0]).toEqual([undefined, null]);
+    expect(mocks.speedApiCtorArgs[0]).toEqual([undefined]);
     expect(mocks.coverageMapApiCtorArgs[0]).toEqual([undefined]);
   });
 
@@ -408,7 +440,6 @@ describe('engine regression', () => {
         speedApiBaseUrl: 'https://speed.internal.example',
         coverageMapApiBaseUrl: 'https://map.internal.example',
       },
-      null,
     ]);
     expect(mocks.coverageMapApiCtorArgs[0]).toEqual([
       {
@@ -483,9 +514,14 @@ describe('engine regression', () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
 
     let releaseLatency: () => void = () => {};
+    let markLatencyStarted: () => void = () => {};
+    const latencyStarted = new Promise<void>((resolve) => {
+      markLatencyStarted = resolve;
+    });
     mocks.latencyMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
+          markLatencyStarted();
           releaseLatency = () =>
             resolve({
               latencies: [10, 11, 12],
@@ -518,8 +554,9 @@ describe('engine regression', () => {
     };
 
     const runPromise = engine.run(server);
+    await latencyStarted;
+    expect(engine.isRunning).toBe(true);
     await expect(engine.run(server)).rejects.toThrow('Speed test is already running');
-
     releaseLatency();
     await runPromise;
   });
@@ -572,5 +609,411 @@ describe('engine regression', () => {
       type: applicationMetadata.type,
       website: 'https://coveragemap.com',
     });
+  });
+
+  it('applies setNetworkProvider overrides to stages and final results', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    engine.setNetworkProvider({
+      getConnectionType: () => 'wifi',
+      getWifiMetadata: () => ({ ssidName: 'CoverageMap-Lab', channelNumber: 11 }),
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.results.connectionType).toBe('wifi');
+    expect(result.results.wifi).toMatchObject({
+      ispName: 'CoverageMap ISP',
+      ssidName: 'CoverageMap-Lab',
+      channelNumber: 11,
+    });
+    expect(result.results.cellular).toBeNull();
+    expect(result.results.wired).toBeNull();
+    expect(result.stages?.[0]).toMatchObject({
+      connectionType: 'wifi',
+      wifi: { ssidName: 'CoverageMap-Lab' },
+      cellular: null,
+      wired: null,
+    });
+  });
+
+  it('removes network provider overrides when setNetworkProvider(null) is called', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    engine.setNetworkProvider({
+      getConnectionType: () => 'mobile',
+      getCellularMetadata: () => ({ carrierName: 'Test Carrier' }),
+    });
+    engine.setNetworkProvider(null);
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // After clearing, the engine falls back to default detection (unknown in jsdom)
+    expect(result.results.connectionType).not.toBe('mobile');
+  });
+
+  it('forwards setLocationProvider to the API client for server discovery', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const locationProvider = vi.fn().mockResolvedValue({ latitude: 51.5, longitude: -0.1 });
+    engine.setLocationProvider(locationProvider);
+
+    expect(mocks.setLocationProviderMock).toHaveBeenCalledWith(locationProvider);
+  });
+
+  it('clears location provider when setLocationProvider(null) is called', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const locationProvider = vi.fn().mockResolvedValue({ latitude: 51.5, longitude: -0.1 });
+    engine.setLocationProvider(locationProvider);
+    engine.setLocationProvider(null);
+
+    expect(mocks.setLocationProviderMock).toHaveBeenLastCalledWith(null);
+  });
+
+  it('calls location provider at every stage boundary when a device provider is set', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    let callIndex = 0;
+    const locationProvider = vi.fn().mockImplementation(() => {
+      callIndex++;
+      return Promise.resolve({ latitude: 40 + callIndex * 0.01, longitude: -74 });
+    });
+    engine.setLocationProvider(locationProvider);
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // Provider is called once upfront (server selection) + once per stage boundary.
+    // Default test selection: latencyStart, downloadStart, downloadEnd, uploadStart, uploadEnd = 5 stage calls.
+    // Total = 1 (initial) + 5 (stage boundaries) = 6 calls.
+    expect(locationProvider.mock.calls.length).toBe(6);
+
+    // Each stage record should have a distinct location stamped at that boundary.
+    const latitudes = result.stages?.map((s) => s.location?.latitude) ?? [];
+    const uniqueLatitudes = new Set(latitudes);
+    expect(uniqueLatitudes.size).toBe(result.stages?.length);
+
+    // The final result location is the last acquired (uploadEnd), not the initial one.
+    const lastStageLatitude = result.stages?.at(-1)?.location?.latitude;
+    expect(result.results.location?.latitude).toBe(lastStageLatitude);
+  });
+
+  it('re-resolves network provider at every stage boundary when a network provider is set', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    let callIndex = 0;
+    engine.setNetworkProvider({
+      getConnectionType: () => 'wifi',
+      getWifiMetadata: () => {
+        callIndex++;
+        return { ssidName: `WiFi-${callIndex}`, channelNumber: callIndex };
+      },
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // Each stage record should have a distinct ssidName stamped at that boundary.
+    const ssids = result.stages?.map((s) => s.wifi?.ssidName) ?? [];
+    const uniqueSsids = new Set(ssids);
+    expect(uniqueSsids.size).toBe(result.stages?.length);
+
+    // The final result reflects the last-resolved network (uploadEnd).
+    const lastStageSsid = result.stages?.at(-1)?.wifi?.ssidName;
+    expect(result.results.wifi?.ssidName).toBe(lastStageSsid);
+  });
+
+  it('calls location provider once when no provider is set (IP fallback)', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    // No setLocationProvider — relies on IP geolocation from getConnectionInfo
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // All stage records share the same IP-derived location object.
+    const latitudes = result.stages?.map((s) => s.location?.latitude) ?? [];
+    expect(latitudes.every((lat) => lat === latitudes[0])).toBe(true);
+  });
+
+  it('sets ispName from connectionInfo.asOrg on both results and every stage', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.getConnectionInfoMock.mockResolvedValue({
+      client: {
+        ip: '2.2.2.2',
+        latitude: 51,
+        longitude: -0.1,
+        asOrg: 'Acme Broadband',
+      },
+    });
+
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.results.ispName).toBe('Acme Broadband');
+    expect(result.stages?.every((s) => s.ispName === 'Acme Broadband')).toBe(true);
+  });
+
+  it('sets ispName to null when connectionInfo has no asOrg', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.getConnectionInfoMock.mockResolvedValue({
+      client: { ip: '3.3.3.3', latitude: 0, longitude: 0, asOrg: null },
+    });
+
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.results.ispName).toBeNull();
+    expect(result.stages?.every((s) => s.ispName === null)).toBe(true);
+  });
+
+  it('sets wired to null when connection type is unknown', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    // jsdom has no navigator.connection so the engine resolves to 'unknown'
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.results.connectionType).toBe('unknown');
+    expect(result.results.wired).toBeNull();
+    expect(result.results.wifi).toBeNull();
+    expect(result.results.cellular).toBeNull();
+  });
+
+  it('populates testsRun flags and connection/packet fields from estimation results on a full run', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.testType.testsRun).toEqual({ latency: true, download: true, upload: true });
+    // Mock download estimation returns 26.6 Mbps → packetSize=128 KB (20–30 range), connectionCount=6
+    expect(result.testType.downloadPacketSize).toBe(128);
+    expect(result.testType.downloadConnectionCount).toBe(6);
+    // Mock upload estimation returns 18.4 Mbps → packetSize=512 KB (10–50 range), connectionCount=6
+    expect(result.testType.uploadPacketSize).toBe(512);
+    expect(result.testType.uploadConnectionCount).toBe(6);
+    // Durations reflect the default config (10 s)
+    expect(result.testType.downloadTestDuration).toBe(10000);
+    expect(result.testType.uploadTestDuration).toBe(10000);
+  });
+
+  it('sets download testsRun flag and related testType fields to null/false when download is disabled', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({
+      application: applicationMetadata,
+      tests: { latency: true, download: false, upload: true },
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.testType.testsRun).toEqual({ latency: true, download: false, upload: true });
+    expect(result.testType.downloadPacketSize).toBeNull();
+    expect(result.testType.downloadConnectionCount).toBeNull();
+    expect(result.testType.downloadTestDuration).toBeNull();
+    // Upload fields should still be populated
+    expect(result.testType.uploadPacketSize).toBe(512);
+    expect(result.testType.uploadConnectionCount).toBe(6);
+    expect(result.testType.uploadTestDuration).toBe(10000);
+  });
+
+  it('sets upload testsRun flag and related testType fields to null/false when upload is disabled', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({
+      application: applicationMetadata,
+      tests: { latency: true, download: true, upload: false },
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.testType.testsRun).toEqual({ latency: true, download: true, upload: false });
+    expect(result.testType.uploadPacketSize).toBeNull();
+    expect(result.testType.uploadConnectionCount).toBeNull();
+    expect(result.testType.uploadTestDuration).toBeNull();
+    // Download fields should still be populated
+    expect(result.testType.downloadPacketSize).toBe(128);
+    expect(result.testType.downloadConnectionCount).toBe(6);
+    expect(result.testType.downloadTestDuration).toBe(10000);
+  });
+
+  it('leaves testType connection/packet fields null when estimation fails before populating them', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.downloadEstimationMock.mockRejectedValueOnce(new Error('estimation timeout'));
+
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // All three tests were configured to run
+    expect(result.testType.testsRun).toEqual({ latency: true, download: true, upload: true });
+    // Estimation threw before connection/packet values were derived
+    expect(result.testType.downloadPacketSize).toBeNull();
+    expect(result.testType.downloadConnectionCount).toBeNull();
+    // Upload never ran since the error aborted the test
+    expect(result.testType.uploadPacketSize).toBeNull();
+    expect(result.testType.uploadConnectionCount).toBeNull();
+    expect(result.results.measurements.failedReason).toBe('estimation timeout');
   });
 });

@@ -10,8 +10,6 @@ export {
   getDeviceId,
   parseBrowserInfo,
   parseOSInfo,
-  getConnectionType,
-  getNetworkInfo,
   getBrowserInfo,
   buildDeviceResult,
 } from './device-info.js';
@@ -22,7 +20,6 @@ export type {
   DeviceMetadataProviderConfig,
   ParsedBrowserInfo,
   ParsedOSInfo,
-  NetworkInfo,
 } from './device-info.js';
 export {
   defaultSpeedTestLocationProvider,
@@ -34,3 +31,13 @@ export type {
   ResolvedSpeedTestLocation,
   SpeedTestLocationCoordinates,
 } from './location-provider.js';
+
+export {
+  getNetworkInfo,
+  defaultSpeedTestNetworkProvider,
+  resolveSpeedTestNetwork,
+} from './network-provider.js';
+export type {
+  SpeedTestNetworkSource,
+  ResolvedSpeedTestNetwork,
+} from './network-provider.js';

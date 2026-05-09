@@ -3,6 +3,6 @@ import type { ApiBaseUrlOverrides } from '../src/api/config.js';
 /**
  * Base URL overrides for deploy validation (`npm run test:deploy`).
  * Leave properties unset to use the library’s default production hosts.
- * In CI, `COVERAGEMAP_SPEED_API_BASE_URL` and `COVERAGEMAP_API_BASE_URL` override these per field when set.
+ * In GitHub Actions deploy validation, repository/environment secrets with those names set these env vars and override per field when set.
  */
 export const deployValidationApiOverrides: ApiBaseUrlOverrides = {};

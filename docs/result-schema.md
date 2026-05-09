@@ -3,6 +3,45 @@
 This document explains the `NetworkTestResultTestResults` payload in practical terms.
 Use it when integrating storage, analytics, or downstream reporting.
 
+The canonical definitions live in the package source: [`src/types/test-results.ts`](../src/types/test-results.ts) and [`src/types/speed-server.ts`](../src/types/speed-server.ts) (for `SpeedTestServer`).
+
+## Shared types
+
+These aliases appear on multiple interfaces:
+
+```ts
+type DeviceOS =
+  | 'iOS'
+  | 'android'
+  | 'iPadOS'
+  | 'windows'
+  | 'mac'
+  | 'linux'
+  | 'chromeos'
+  | 'web';
+
+type TestStatus = 'passed' | 'failed';
+
+type TestTypeSingleMultiple = 'single' | 'multiple';
+
+type LocationTag = 'indoor' | 'outdoor' | 'driving' | 'other';
+
+type LocationType = 'device' | 'ip';
+
+type TestStage =
+  | 'latencyStart'
+  | 'downloadStart'
+  | 'downloadEnd'
+  | 'uploadStart'
+  | 'uploadEnd';
+
+type ConnectionType = 'wifi' | 'mobile' | 'ethernet' | 'bluetooth' | 'none' | 'unknown';
+
+type RuntimeType = 'browser' | 'node' | 'unknown';
+
+type ApplicationType = 'web' | 'backend' | 'mobile' | 'desktop' | 'cli' | 'serverless' | 'other';
+```
+
 ## Top-level shape
 
 ```ts
@@ -15,7 +54,7 @@ interface NetworkTestResultTestResults {
 }
 ```
 
-## `version`
+### `version`
 
 - Schema version for compatibility tracking.
 - Current value is `1`.
@@ -25,98 +64,273 @@ interface NetworkTestResultTestResults {
 
 Device/runtime metadata captured at run time.
 
+```ts
+interface NetworkTestResultDevice {
+  id: string | null;
+  manufacturer: string;
+  nameId: string | null;
+  name: string;
+  os: DeviceOS;
+  osVersion: string;
+  appName: string | null;
+  appVersion: string | null;
+  application: NetworkTestResultApplicationInfo;
+
+  browserName: string | null;
+  browserVersion: string | null;
+  browserEngine: string | null;
+  browserEngineVersion: string | null;
+
+  cpuArchitecture: string | null;
+  cpuCores: number | null;
+  deviceMemoryGb: number | null;
+  deviceType: string | null;
+  deviceVendor: string | null;
+  deviceModel: string | null;
+  isMobile: boolean;
+
+  language: string | null;
+  timezone: string | null;
+  coreSystem: NetworkTestResultCoreSystemInfo | null;
+}
+```
+
 Important categories:
 
 - app identity (`appName`, `appVersion`, `application`),
 - browser/device data when available,
-- backend/runtime system data under `coreSystem`.
+- backend/runtime system data under `coreSystem` (null in environments where it is not collected).
 
-## `device.application` (required)
+### `device.application` (required)
 
-Captured from `SpeedTestEngineOptions.application`. These fields are always present in emitted results:
+Captured from `SpeedTestEngineOptions.application`. Shape:
 
-- `name`
-- `version`
-- `author`
-- `organization`
-- `type`
-
-Optional fields (nullable when not provided):
-
-- `website`
+```ts
+interface NetworkTestResultApplicationInfo {
+  id: string;
+  name: string;
+  version: string;
+  organization: string;
+  type: ApplicationType | (string & {});
+  website: string | null;
+}
+```
 
 This object is the canonical application attribution block used for CoverageMap analytics/metrics segmentation.
 
-## `device.coreSystem` (backend-focused)
+### `device.coreSystem` (nullable)
 
 Present for runtime/system telemetry and especially valuable outside browsers.
 
-Fields:
-
-- `runtime`: `browser`, `node`, or `unknown`
-- `hostName`: host identifier when known
-- `processId`: process id where available
-- `platform`: runtime platform (`win32`, `linux`, etc.)
-- `architecture`: CPU architecture (`x64`, `arm64`, etc.)
-- `runtimeVersion`: runtime version (for Node, `process.version`)
-- `uptimeSeconds`: process uptime when available
-- `memoryRssMb`: resident memory snapshot in MB when available
+```ts
+interface NetworkTestResultCoreSystemInfo {
+  runtime: RuntimeType;
+  hostName: string | null;
+  processId: number | null;
+  platform: string | null;
+  architecture: string | null;
+  runtimeVersion: string | null;
+  uptimeSeconds: number | null;
+  memoryRssMb: number | null;
+}
+```
 
 ## `testType`
 
 Describes execution mode and test tunables used for this run.
+
+```ts
+interface NetworkTestResultTestsRun {
+  latency: boolean;
+  download: boolean;
+  upload: boolean;
+}
+
+interface NetworkTestResultTestType {
+  id: string;
+  sessionId: string;
+  type: TestTypeSingleMultiple;
+  testIndex: number | null;
+  testCount: number | null;
+  tag: LocationTag;
+  testsRun: NetworkTestResultTestsRun;
+  downloadTestDuration: number | null;
+  uploadTestDuration: number | null;
+  testProtocol: string;
+  downloadConnectionCount: number | null;
+  uploadConnectionCount: number | null;
+  downloadPacketSize: number | null;
+  uploadPacketSize: number | null;
+}
+```
 
 Frequently used fields:
 
 - `id`: unique per test run
 - `sessionId`: stable per engine instance/session
 - `type`: currently `single`
-- `downloadTestDuration` and `uploadTestDuration`
+- `testsRun`: flags indicating which of the three test phases (latency, download, upload) were enabled for this run
+- `downloadTestDuration` and `uploadTestDuration`: `null` when the corresponding test was not enabled
 - `testProtocol`: currently `WSS`
-- `downloadConnectionCount` and `uploadConnectionCount`
-- `downloadPacketSize` and `uploadPacketSize`
+- `downloadConnectionCount` and `uploadConnectionCount`: `null` when the corresponding test was not enabled or did not reach the estimation phase
+- `downloadPacketSize` and `uploadPacketSize`: `null` when the corresponding test was not enabled or did not reach the estimation phase
 
 ## `results`
 
 Contains environmental context and measured outputs.
 
-### Network context fields
+```ts
+interface NetworkTestResultResults {
+  dateTime: string;
+  connectionType: string | null;
+  externalIpAddress: string | null;
+  ispName: string | null;
+  testStatus: TestStatus;
+  location: NetworkTestResultLocation | null;
+  server: SpeedTestServer | null;
+  cellular: NetworkTestResultCellularInfo | null;
+  wifi: NetworkTestResultWiFiInfo | null;
+  wired: NetworkTestResultWiredInfo | null;
+  measurements: NetworkTestResultMeasurements;
+}
+```
 
-- `connectionType`
-- `externalIpAddress`
-- `location`
-- `server`
-- `wifi` and `wired` metadata
+### `results.server`
 
-### Measurement fields
+```ts
+interface SpeedTestServer {
+  id: string;
+  domain: string;
+  port: number | null;
+  provider: string | null;
+  city: string | null;
+  region: string | null;
+  country: string;
+  location: string;
+  latitude: number | null;
+  longitude: number | null;
+  distance: number | null;
+  isCDN: boolean | null;
+}
+```
 
-Located at `results.measurements`:
+### `results.location`
 
-- `estimatedDownloadSpeed`
-- `downloadSpeed`
-- `totalDownload`
-- `estimatedUploadSpeed`
-- `uploadSpeed`
-- `totalUpload`
-- `latency`
-- `jitter`
-- `latenciesList`
-- `downloadList` (time-series snapshots)
-- `uploadList` (time-series snapshots)
-- `failedReason`
-- `failedStage`
+```ts
+interface NetworkTestResultLocation {
+  latitude: number;
+  longitude: number;
+  elevation: number | null;
+  heading: number | null;
+  speed: number | null;
+  locationType: LocationType;
+}
+```
+
+### `results.cellular`, `results.wifi`, and `results.wired`
+
+```ts
+interface NetworkTestResultCellularInfo {
+  technology: string | null;
+  mccCode: string | null;
+  mncCode: string | null;
+  countryIso: string | null;
+  carrierName: string | null;
+  provider: string | null;
+  isRoaming: boolean | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  rssi: number | null;
+  sinr: number | null;
+  primaryBand: NetworkTestResultBandInfo | null;
+  secondaryBands: NetworkTestResultBandInfo[] | null;
+}
+
+interface NetworkTestResultBandInfo {
+  bandNumber: number;
+  bandwidth: number;
+  technology: string | null;
+}
+
+interface NetworkTestResultWiFiInfo {
+  ssidName: string | null;
+  bssid: string | null;
+  ispName: string | null;
+  wifiStandard: string | null;
+  txRate: number | null;
+  rxRate: number | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  rssi: number | null;
+  sinr: number | null;
+  noise: number | null;
+  channelNumber: number | null;
+}
+
+interface NetworkTestResultWiredInfo {
+  ispName: string | null;
+  macAddress: string | null;
+  dataLink: number | null;
+}
+```
+
+`ispName` is the ISP or organisation name derived from IP geolocation (`connectionInfo.client.asOrg`) and is available regardless of connection type. It duplicates the per-block carrier/ISP fields for convenience.
+
+`cellular`, `wifi`, and `wired` are mutually exclusive in default resolution. The active block is determined by the detected connection type:
+
+- `mobile` → `cellular` is populated, `wifi` and `wired` are `null`
+- `wifi` → `wifi` is populated, `cellular` and `wired` are `null`
+- `ethernet` → `wired` is populated, `cellular` and `wifi` are `null`
+- `bluetooth`, `none`, `unknown` → all three blocks are `null`
+
+A custom `networkProvider` can override this behaviour and set whichever blocks are needed.
+
+### `results.measurements`
+
+```ts
+interface NetworkTestResultMeasurements {
+  dateTime: string | null;
+  downloadSpeed: number | null;
+  totalDownload: number | null;
+  uploadSpeed: number | null;
+  totalUpload: number | null;
+  latency: number | null;
+  jitter: number | null;
+  latenciesList: number[] | null;
+  downloadList: NetworkTestResultSpeedTimePair[] | null;
+  uploadList: NetworkTestResultSpeedTimePair[] | null;
+  failedReason: string | null;
+  failedStage: TestStage | null;
+}
+
+interface NetworkTestResultSpeedTimePair {
+  time: number;
+  speed: number;
+  data: number;
+}
+```
+
+`downloadList` and `uploadList` are time-series samples (time offset, speed, bytes). `failedReason` / `failedStage` are set when the run does not complete successfully.
 
 ## `stages`
 
 Chronological stage records with timestamps and network context snapshots.
 
-Typical values:
+```ts
+interface NetworkTestResultStage {
+  testStage: string;
+  dateTime: string;
+  connectionType: string | null;
+  externalIpAddress: string | null;
+  ispName: string | null;
+  location: NetworkTestResultLocation | null;
+  cellular: NetworkTestResultCellularInfo | null;
+  wifi: NetworkTestResultWiFiInfo | null;
+  wired: NetworkTestResultWiredInfo | null;
+}
+```
 
-- `latencyStart`
-- `downloadStart`
-- `downloadEnd`
-- `uploadStart`
-- `uploadEnd`
+`testStage` is typed as `string` in the schema; emitted values align with `TestStage` (`latencyStart`, `downloadStart`, etc.).
 
 ## Nullability expectations
 
@@ -147,5 +361,5 @@ When new fields are added:
 See also:
 
 - [Library API](./library-api.md)
+- [Providers](./providers.md) — How `cellular`, `wifi`, and `wired` blocks are populated and overridden
 - [Protocol](./protocol.md)
-- [Testing Guide](./testing.md)

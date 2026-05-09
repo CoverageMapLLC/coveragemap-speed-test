@@ -4,9 +4,7 @@ import {
   buildDeviceResult,
   configureDeviceInfo,
   getBrowserInfo,
-  getConnectionType,
   getDeviceId,
-  getNetworkInfo,
   parseBrowserInfo,
   parseOSInfo,
   resetDeviceMetadataProvider,
@@ -73,14 +71,6 @@ describe('device metadata abstraction', () => {
         osName: 'InjectedOS',
         osVersion: '1.0',
       }),
-      getConnectionType: vi.fn().mockReturnValue('ethernet'),
-      getNetworkInfo: vi.fn().mockReturnValue({
-        connectionType: 'ethernet',
-        effectiveType: '4g',
-        downlink: 100,
-        rtt: 10,
-        saveData: false,
-      }),
       getBrowserInfo: vi.fn().mockReturnValue({
         browserName: 'InjectedBrowser',
         browserVersion: '1.0',
@@ -117,8 +107,6 @@ describe('device metadata abstraction', () => {
     expect(getDeviceId()).toBe('custom-id');
     expect(parseBrowserInfo().browserName).toBe('InjectedBrowser');
     expect(parseOSInfo().osName).toBe('InjectedOS');
-    expect(getConnectionType()).toBe('ethernet');
-    expect(getNetworkInfo().downlink).toBe(100);
     expect(getBrowserInfo().vendor).toBe('CoverageMap');
     expect(buildDeviceResult().appName).toBe('Custom Runtime Agent');
 
@@ -151,14 +139,6 @@ describe('device metadata abstraction', () => {
         browserEngine: 'Engine',
       }),
       parseOSInfo: vi.fn().mockReturnValue({ osName: 'OS', osVersion: '1.0' }),
-      getConnectionType: vi.fn().mockReturnValue('unknown'),
-      getNetworkInfo: vi.fn().mockReturnValue({
-        connectionType: 'unknown',
-        effectiveType: null,
-        downlink: null,
-        rtt: null,
-        saveData: false,
-      }),
       getBrowserInfo: vi.fn().mockReturnValue({
         browserName: 'Browser',
         browserVersion: '1.0',
@@ -203,14 +183,6 @@ describe('device metadata abstraction', () => {
         browserEngine: 'SentinelEngine',
       }),
       parseOSInfo: vi.fn().mockReturnValue({ osName: 'SentinelOS', osVersion: '1.0' }),
-      getConnectionType: vi.fn().mockReturnValue('unknown'),
-      getNetworkInfo: vi.fn().mockReturnValue({
-        connectionType: 'unknown',
-        effectiveType: null,
-        downlink: null,
-        rtt: null,
-        saveData: false,
-      }),
       getBrowserInfo: vi.fn().mockReturnValue({
         browserName: 'SentinelBrowser',
         browserVersion: '1.0',

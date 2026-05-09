@@ -78,6 +78,12 @@ export interface NetworkTestResultCoreSystemInfo {
   memoryRssMb: number | null;
 }
 
+export interface NetworkTestResultTestsRun {
+  latency: boolean;
+  download: boolean;
+  upload: boolean;
+}
+
 export interface NetworkTestResultTestType {
   id: string;
   sessionId: string;
@@ -85,6 +91,7 @@ export interface NetworkTestResultTestType {
   testIndex: number | null;
   testCount: number | null;
   tag: LocationTag;
+  testsRun: NetworkTestResultTestsRun;
   downloadTestDuration: number | null;
   uploadTestDuration: number | null;
   testProtocol: string;
@@ -97,12 +104,12 @@ export interface NetworkTestResultTestType {
 export interface NetworkTestResultResults {
   dateTime: string;
   connectionType: string | null;
-  localIpAddress: string | null;
   externalIpAddress: string | null;
-  vpnEnabled: boolean | null;
+  ispName: string | null;
   testStatus: TestStatus;
   location: NetworkTestResultLocation | null;
   server: SpeedTestServer | null;
+  cellular: NetworkTestResultCellularInfo | null;
   wifi: NetworkTestResultWiFiInfo | null;
   wired: NetworkTestResultWiredInfo | null;
   measurements: NetworkTestResultMeasurements;
@@ -117,12 +124,47 @@ export interface NetworkTestResultLocation {
   locationType: LocationType;
 }
 
+export interface NetworkTestResultCellularInfo {
+  technology: string | null;
+  mccCode: string | null;
+  mncCode: string | null;
+  countryIso: string | null;
+  carrierName: string | null;
+  provider: string | null;
+  isRoaming: boolean | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  rssi: number | null;
+  sinr: number | null;
+  primaryBand: NetworkTestResultBandInfo | null;
+  secondaryBands: NetworkTestResultBandInfo[] | null;
+}
+
+export interface NetworkTestResultBandInfo {
+  bandNumber: number;
+  bandwidth: number;
+  technology: string | null;
+}
+
 export interface NetworkTestResultWiFiInfo {
+  ssidName: string | null;
+  bssid: string | null;
   ispName: string | null;
+  wifiStandard: string | null;
+  txRate: number | null;
+  rxRate: number | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  rssi: number | null;
+  sinr: number | null;
+  noise: number | null;
+  channelNumber: number | null;
 }
 
 export interface NetworkTestResultWiredInfo {
   ispName: string | null;
+  macAddress: string | null;
+  dataLink: number | null;
 }
 
 export interface NetworkTestResultMeasurements {
@@ -150,10 +192,10 @@ export interface NetworkTestResultStage {
   testStage: string;
   dateTime: string;
   connectionType: string | null;
-  localIpAddress: string | null;
   externalIpAddress: string | null;
-  vpnEnabled: boolean | null;
+  ispName: string | null;
   location: NetworkTestResultLocation | null;
+  cellular: NetworkTestResultCellularInfo | null;
   wifi: NetworkTestResultWiFiInfo | null;
   wired: NetworkTestResultWiredInfo | null;
 }

@@ -10,6 +10,7 @@ Practical, production-oriented code for common integration patterns. Each sectio
   - [Minimal run](#minimal-run)
   - [Live progress callbacks](#live-progress-callbacks)
   - [Run with location binding](#run-with-location-binding)
+  - [Run with network metadata overrides](#run-with-network-metadata-overrides)
 - [Server selection](#server-selection)
   - [Nearest server via IP location](#nearest-server-via-ip-location)
   - [Nearest server via geolocation](#nearest-server-via-geolocation)
@@ -131,7 +132,7 @@ const result: NetworkTestResultTestResults = await engine.run();
 
 ### Run with location binding
 
-Configure `locationProvider` so `run()` resolves coordinates once and **binds** them to the payload: `results.location`, each `stages[]` row, and the uploaded result. Values from the provider use `locationType: 'device'`. If the provider returns `null` or throws, the engine uses IP geolocation from `getConnectionInfo()` instead (`locationType: 'ip'`). The same resolved position is also used to pick the nearest server when you call `run()` with no server argument. The snippet below uses `navigator.geolocation`; ensure the page is served over HTTPS (or localhost) so the API is available.
+Register a location provider via `setLocationProvider()` so `run()` resolves coordinates as needed and **binds** them to the payload: `results.location`, each `stages[]` row, and the uploaded result. Values from the provider use `locationType: 'device'`. If the provider returns `null` or throws, the engine uses IP geolocation from `getConnectionInfo()` instead (`locationType: 'ip'`). The same resolved position is also used to pick the nearest server when you call `run()` with no server argument.
 
 ```ts
 import { SpeedTestEngine } from '@coveragemap/speed-test';
@@ -146,28 +147,29 @@ async function runWithBoundLocation(): Promise<void> {
       organization: 'CoverageMap',
       type: 'web',
     },
-    locationProvider: async (_context) => {
-      if (!navigator.geolocation) return null;
+  });
 
-      try {
-        const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            timeout: 5000,
-            maximumAge: 0,
-          });
+  engine.setLocationProvider(async (_context) => {
+    if (!navigator.geolocation) return null;
+
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          timeout: 5000,
+          maximumAge: 0,
         });
+      });
 
-        return {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          elevation: position.coords.altitude,
-          heading: position.coords.heading,
-          speed: position.coords.speed,
-        };
-      } catch {
-        return null;
-      }
-    },
+      return {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        elevation: position.coords.altitude,
+        heading: position.coords.heading,
+        speed: position.coords.speed,
+      };
+    } catch {
+      return null;
+    }
   });
 
   const result: NetworkTestResultTestResults = await engine.run();
@@ -185,11 +187,108 @@ To prefetch the server list or pass a chosen server to `run()`, see [Server sele
 
 ---
 
+### Run with network metadata overrides
+
+Use `setNetworkProvider()` to override network determination and populate custom `cellular`, `wifi`, and `wired` payload blocks. `SpeedTestNetworkProvider` is an interface with four optional methods — implement only the ones relevant to your platform SDK.
+
+```ts
+import { SpeedTestEngine } from '@coveragemap/speed-test';
+import type {
+  NetworkTestResultTestResults,
+  SpeedTestNetworkProvider,
+  NetworkTestResultCellularInfo,
+  NetworkTestResultWiFiInfo,
+  NetworkTestResultWiredInfo,
+} from '@coveragemap/speed-test';
+
+const engine = new SpeedTestEngine({
+  application: {
+    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    name: 'CoverageMap Native Bridge',
+    version: '3.2.1',
+    organization: 'CoverageMap',
+    type: 'mobile',
+  },
+});
+
+const networkProvider: SpeedTestNetworkProvider = {
+  getConnectionType(context) {
+    // return null to let the engine use its own detection
+    return context.connectionType;
+  },
+
+  async getCellularMetadata(): Promise<Partial<NetworkTestResultCellularInfo> | null> {
+    // map metrics from your native SDK / modem API
+    return {
+      technology: '5g',
+      mccCode: '310',
+      mncCode: '260',
+      countryIso: 'us',
+      carrierName: 'MVNO A',
+      provider: 'MNO A',
+      isRoaming: false,
+      rsrp: -95,
+      rsrq: -12,
+      rssi: -70,
+      sinr: 18,
+      primaryBand: { bandNumber: 12, bandwidth: 100000, technology: '4g' },
+      secondaryBands: [
+        { bandNumber: 41, bandwidth: 80000, technology: '5g' },
+        { bandNumber: 78, bandwidth: 60000, technology: '5g' },
+      ],
+    };
+  },
+
+  async getWifiMetadata(): Promise<Partial<NetworkTestResultWiFiInfo> | null> {
+    return {
+      ssidName: 'Office-WiFi',
+      bssid: 'AA:BB:CC:DD:EE:FF',
+      ispName: 'Fiber ISP',
+      wifiStandard: '802.11ax',
+      txRate: 1200,
+      rxRate: 960,
+      rssi: -48,
+      sinr: 34,
+      noise: -90,
+      channelNumber: 149,
+    };
+  },
+
+  async getWiredMetadata(): Promise<Partial<NetworkTestResultWiredInfo> | null> {
+    return {
+      ispName: 'Datacenter Ethernet',
+      macAddress: 'AA:BB:CC:DD:EE:FF',
+      dataLink: 10000,
+    };
+  },
+};
+
+engine.setNetworkProvider(networkProvider);
+
+const result: NetworkTestResultTestResults = await engine.run();
+
+console.log(result.results.connectionType);
+console.log(result.results.cellular);
+console.log(result.results.wifi);
+console.log(result.results.wired);
+```
+
+Swap implementations at runtime — for example when your native SDK reports a connection change:
+
+```ts
+engine.setNetworkProvider({
+  getConnectionType: () => 'wifi',
+  getWifiMetadata: () => ({ ssidName: 'FieldKit', channelNumber: 44 }),
+});
+```
+
+---
+
 ## Server selection
 
 ### Nearest server via IP location
 
-Without a `locationProvider`, `getServers()` ranks endpoints using coordinates from `getConnectionInfo()` (IP-based client location from the Speed API). Fetch the ordered list, then pass the first entry to `run()` (or call `run()` with no arguments — the engine uses the same list ordering internally).
+By defatul (without a `locationProvider`), `getServers()` ranks endpoints using coordinates from `getConnectionInfo()` (IP-based client location from the Speed API). Fetch the ordered list, then pass the first entry to `run()` (or call `run()` with no arguments — the engine uses the same list ordering internally).
 
 ```ts
 import { SpeedTestEngine } from '@coveragemap/speed-test';
@@ -218,7 +317,7 @@ const result: NetworkTestResultTestResults = await engine.run(servers[0]);
 
 ### Nearest server via geolocation
 
-Register a `locationProvider` (for example the browser Geolocation API) so server ranking and result `locationType` use device coordinates. When the provider returns `null` or throws, behavior matches [Nearest server via IP location](#nearest-server-via-ip-location).
+Call `setLocationProvider()` so server ranking and result `locationType` use device coordinates. When the provider returns `null` or throws, behavior matches [Nearest server via IP location](#nearest-server-via-ip-location).
 
 ```ts
 import { SpeedTestEngine } from '@coveragemap/speed-test';
@@ -235,28 +334,29 @@ const engine = new SpeedTestEngine({
     organization: 'CoverageMap',
     type: 'web',
   },
-  locationProvider: async (_context) => {
-    if (!navigator.geolocation) return null;
+});
 
-    try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          timeout: 5000,
-          maximumAge: 0,
-        });
+engine.setLocationProvider(async (_context) => {
+  if (!navigator.geolocation) return null;
+
+  try {
+    const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        timeout: 5000,
+        maximumAge: 0,
       });
+    });
 
-      return {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        elevation: position.coords.altitude,
-        heading: position.coords.heading,
-        speed: position.coords.speed,
-      };
-    } catch {
-      return null;
-    }
-  },
+    return {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      elevation: position.coords.altitude,
+      heading: position.coords.heading,
+      speed: position.coords.speed,
+    };
+  } catch {
+    return null;
+  }
 });
 
 const servers: SpeedTestServer[] = await engine.getServers();
@@ -269,7 +369,7 @@ const result: NetworkTestResultTestResults = await engine.run(servers[0]);
 
 ### Speed Test Server List
 
-Use [`SpeedTestApiClient`](library-api.md#speedtestapiclient) when you only need discovery data (or connection metadata) and do not want to configure `SpeedTestEngine` application metadata. It calls the same Speed HTTP endpoints, applies the same 30‑minute server cache, and resolves location the same way: optional constructor `locationProvider` (or `setLocationProvider()` later), otherwise IP coordinates via `getConnectionInfo()`.
+Use [`SpeedTestApiClient`](library-api.md#speedtestapiclient) when you only need discovery data (or connection metadata) and do not want to configure `SpeedTestEngine` application metadata. It calls the same Speed HTTP endpoints, applies the same 30‑minute server cache, and resolves location the same way: `setLocationProvider()` for device coordinates, otherwise IP coordinates via `getConnectionInfo()`.
 
 ```ts
 import { SpeedTestApiClient } from '@coveragemap/speed-test';
@@ -281,7 +381,7 @@ const servers: SpeedTestServer[] = await speedApi.getServers();
 console.log('nearest id', servers[0]?.id, servers[0]?.name);
 ```
 
-Pass optional base URL overrides as the first constructor argument and a `locationProvider` as the second. The same override object is accepted on `SpeedTestEngine` via `api`. For `refreshServers()`, `getConnectionInfo()`, and lookup by id, see [SpeedTestApiClient](library-api.md#speedtestapiclient).
+Pass optional base URL overrides as the constructor argument. The same override object is accepted on `SpeedTestEngine` via `api`. For `refreshServers()`, `getConnectionInfo()`, and lookup by id, see [SpeedTestApiClient](library-api.md#speedtestapiclient).
 
 ---
 
@@ -381,8 +481,6 @@ import type {
   DeviceMetadataProviderConfig,
   ParsedBrowserInfo,
   ParsedOSInfo,
-  ConnectionType,
-  NetworkInfo,
   BrowserInfo,
   NetworkTestResultDevice,
   NetworkTestResultTestResults,
@@ -404,15 +502,6 @@ class ElectronDeviceProvider implements DeviceMetadataProvider {
     return { name: process.platform, version: null };
   }
 
-  getConnectionType(): ConnectionType {
-    // Network Information API is not available in Electron's main process
-    return 'unknown';
-  }
-
-  getNetworkInfo(): NetworkInfo {
-    return { effectiveType: null, downlink: null, rtt: null };
-  }
-
   getBrowserInfo(): BrowserInfo {
     return {
       userAgent: navigator.userAgent,
@@ -427,8 +516,6 @@ class ElectronDeviceProvider implements DeviceMetadataProvider {
       deviceId: this.getDeviceId(config),
       browser: this.parseBrowserInfo(),
       os: this.parseOSInfo(),
-      connectionType: this.getConnectionType(),
-      network: this.getNetworkInfo(),
     };
   }
 }
@@ -503,4 +590,4 @@ globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket;
 
 ## Full runnable app
 
-A complete React + Vite integration lives in [`examples/react-vite`](../examples/react-vite).
+A complete React + Vite integration lives in [`demos/react-vite`](../demos/react-vite).

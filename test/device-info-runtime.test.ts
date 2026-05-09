@@ -3,7 +3,6 @@ import {
   buildDeviceResult,
   configureDeviceInfo,
   getDeviceId,
-  getConnectionType,
   resetDeviceMetadataProvider,
   resetDeviceInfoConfiguration,
 } from '../src/utils/device-info.js';
@@ -38,7 +37,6 @@ describe('device info runtime support', () => {
     expect(result.deviceType).toBe('server');
     expect(result.coreSystem?.runtime).toBe('node');
     expect(result.coreSystem?.hostName).toBe('backend-node-1');
-    expect(getConnectionType()).toBe('unknown');
   });
 
   it('captures core system override fields in result payload', () => {

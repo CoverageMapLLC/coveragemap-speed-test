@@ -24,6 +24,8 @@ export type {
   NetworkTestResultTestType,
   NetworkTestResultResults,
   NetworkTestResultLocation,
+  NetworkTestResultCellularInfo,
+  NetworkTestResultBandInfo,
   NetworkTestResultWiFiInfo,
   NetworkTestResultWiredInfo,
   NetworkTestResultMeasurements,
@@ -47,5 +49,11 @@ export type {
   SpeedTestLocationProviderContext,
   SpeedTestLocationProvider,
 } from './location-provider.js';
+
+export type {
+  SpeedTestNetworkSnapshot,
+  SpeedTestNetworkProviderContext,
+  SpeedTestNetworkProvider,
+} from './network-provider.js';
 
 export { DEFAULT_CONFIG } from './speed-test.js';

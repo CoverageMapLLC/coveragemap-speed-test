@@ -95,6 +95,37 @@ describe('api clients', () => {
     );
   });
 
+  it('setLocationProvider wires location into server discovery', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ client: { ip: '1.1.1.1' } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [],
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new SpeedTestApiClient({ speedApiBaseUrl: 'https://speed.example.com' });
+    const provider = vi.fn().mockResolvedValue({ latitude: 51.5, longitude: -0.1 });
+    client.setLocationProvider(provider);
+
+    await client.getServers();
+
+    expect(provider).toHaveBeenCalled();
+    expect(fetchMock.mock.calls[1]?.[0]).toContain('latitude=51.5');
+    expect(fetchMock.mock.calls[1]?.[0]).toContain('longitude=-0.1');
+  });
+
+  it('constructor accepts only base URL overrides with no location provider argument', () => {
+    // setLocationProvider() is the exclusive binding point — no second constructor arg
+    const client = new SpeedTestApiClient({ speedApiBaseUrl: 'https://speed.example.com' });
+    expect(client).toBeDefined();
+    expect(typeof client.setLocationProvider).toBe('function');
+  });
+
   it('uploads results with expected request shape', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

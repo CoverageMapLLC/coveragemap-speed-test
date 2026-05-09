@@ -35,8 +35,8 @@ jobs:
         run: npm run test:deploy
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
-          COVERAGEMAP_SPEED_API_BASE_URL: ${{ vars.COVERAGEMAP_SPEED_API_BASE_URL }}
-          COVERAGEMAP_API_BASE_URL: ${{ vars.COVERAGEMAP_API_BASE_URL }}
+          COVERAGEMAP_SPEED_API_BASE_URL: ${{ secrets.COVERAGEMAP_SPEED_API_BASE_URL }}
+          COVERAGEMAP_API_BASE_URL: ${{ secrets.COVERAGEMAP_API_BASE_URL }}
 
       - name: Upload deploy validation artifacts
         if: always()
