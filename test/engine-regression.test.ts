@@ -145,6 +145,7 @@ describe('engine regression', () => {
     expect(result.results.measurements.downloadSpeed).toBe(120);
     expect(result.results.measurements.uploadSpeed).toBe(60);
     expect(result.results.measurements.failedReason).toBeNull();
+    expect(result.results.ispName).toBe('CoverageMap ISP');
     expect(mocks.uploadResultsMock).toHaveBeenCalledTimes(1);
   });
 
@@ -802,5 +803,217 @@ describe('engine regression', () => {
     // All stage records share the same IP-derived location object.
     const latitudes = result.stages?.map((s) => s.location?.latitude) ?? [];
     expect(latitudes.every((lat) => lat === latitudes[0])).toBe(true);
+  });
+
+  it('sets ispName from connectionInfo.asOrg on both results and every stage', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.getConnectionInfoMock.mockResolvedValue({
+      client: {
+        ip: '2.2.2.2',
+        latitude: 51,
+        longitude: -0.1,
+        asOrg: 'Acme Broadband',
+      },
+    });
+
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.results.ispName).toBe('Acme Broadband');
+    expect(result.stages?.every((s) => s.ispName === 'Acme Broadband')).toBe(true);
+  });
+
+  it('sets ispName to null when connectionInfo has no asOrg', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.getConnectionInfoMock.mockResolvedValue({
+      client: { ip: '3.3.3.3', latitude: 0, longitude: 0, asOrg: null },
+    });
+
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.results.ispName).toBeNull();
+    expect(result.stages?.every((s) => s.ispName === null)).toBe(true);
+  });
+
+  it('sets wired to null when connection type is unknown', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    // jsdom has no navigator.connection so the engine resolves to 'unknown'
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.results.connectionType).toBe('unknown');
+    expect(result.results.wired).toBeNull();
+    expect(result.results.wifi).toBeNull();
+    expect(result.results.cellular).toBeNull();
+  });
+
+  it('populates testsRun flags and connection/packet fields from estimation results on a full run', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.testType.testsRun).toEqual({ latency: true, download: true, upload: true });
+    // Mock download estimation returns 26.6 Mbps → packetSize=128 KB (20–30 range), connectionCount=6
+    expect(result.testType.downloadPacketSize).toBe(128);
+    expect(result.testType.downloadConnectionCount).toBe(6);
+    // Mock upload estimation returns 18.4 Mbps → packetSize=512 KB (10–50 range), connectionCount=6
+    expect(result.testType.uploadPacketSize).toBe(512);
+    expect(result.testType.uploadConnectionCount).toBe(6);
+    // Durations reflect the default config (10 s)
+    expect(result.testType.downloadTestDuration).toBe(10000);
+    expect(result.testType.uploadTestDuration).toBe(10000);
+  });
+
+  it('sets download testsRun flag and related testType fields to null/false when download is disabled', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({
+      application: applicationMetadata,
+      tests: { latency: true, download: false, upload: true },
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.testType.testsRun).toEqual({ latency: true, download: false, upload: true });
+    expect(result.testType.downloadPacketSize).toBeNull();
+    expect(result.testType.downloadConnectionCount).toBeNull();
+    expect(result.testType.downloadTestDuration).toBeNull();
+    // Upload fields should still be populated
+    expect(result.testType.uploadPacketSize).toBe(512);
+    expect(result.testType.uploadConnectionCount).toBe(6);
+    expect(result.testType.uploadTestDuration).toBe(10000);
+  });
+
+  it('sets upload testsRun flag and related testType fields to null/false when upload is disabled', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({
+      application: applicationMetadata,
+      tests: { latency: true, download: true, upload: false },
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(result.testType.testsRun).toEqual({ latency: true, download: true, upload: false });
+    expect(result.testType.uploadPacketSize).toBeNull();
+    expect(result.testType.uploadConnectionCount).toBeNull();
+    expect(result.testType.uploadTestDuration).toBeNull();
+    // Download fields should still be populated
+    expect(result.testType.downloadPacketSize).toBe(128);
+    expect(result.testType.downloadConnectionCount).toBe(6);
+    expect(result.testType.downloadTestDuration).toBe(10000);
+  });
+
+  it('leaves testType connection/packet fields null when estimation fails before populating them', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.downloadEstimationMock.mockRejectedValueOnce(new Error('estimation timeout'));
+
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // All three tests were configured to run
+    expect(result.testType.testsRun).toEqual({ latency: true, download: true, upload: true });
+    // Estimation threw before connection/packet values were derived
+    expect(result.testType.downloadPacketSize).toBeNull();
+    expect(result.testType.downloadConnectionCount).toBeNull();
+    // Upload never ran since the error aborted the test
+    expect(result.testType.uploadPacketSize).toBeNull();
+    expect(result.testType.uploadConnectionCount).toBeNull();
+    expect(result.results.measurements.failedReason).toBe('estimation timeout');
   });
 });

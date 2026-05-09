@@ -7,6 +7,7 @@ import type {
   NetworkTestResultResults,
   NetworkTestResultLocation,
   NetworkTestResultStage,
+  NetworkTestResultTestsRun,
 } from './types/test-results.js';
 import type {
   SpeedTestStage,
@@ -169,10 +170,10 @@ export class SpeedTestEngine {
     let uploadEstimation: SpeedEstimationResult | null = null;
     let downloadResult: SpeedTestData | null = null;
     let uploadResult: SpeedTestData | null = null;
-    let downloadConnectionCount = 0;
-    let downloadMessageSizeKb = 0;
-    let uploadConnectionCount = 0;
-    let uploadMessageSizeKb = 0;
+    let downloadConnectionCount: number | null = null;
+    let downloadMessageSizeKb: number | null = null;
+    let uploadConnectionCount: number | null = null;
+    let uploadMessageSizeKb: number | null = null;
     let failedReason: string | null = null;
     let failedStage: string | null = null;
 
@@ -205,6 +206,7 @@ export class SpeedTestEngine {
           dateTime: new Date().toISOString(),
           connectionType: lastNetwork.connectionType,
           externalIpAddress: connectionInfo?.client?.ip ?? null,
+          ispName: connectionInfo?.client?.asOrg ?? null,
           location: lastLocation,
           cellular: lastNetwork.cellular,
           wifi: lastNetwork.wifi,
@@ -312,6 +314,11 @@ export class SpeedTestEngine {
         connectionInfo,
         location: lastLocation,
         network: lastNetwork,
+        testsRun: {
+          latency: this.tests.latency,
+          download: this.tests.download,
+          upload: this.tests.upload,
+        },
         latencyData,
         downloadEstimation,
         downloadResult,
@@ -421,15 +428,16 @@ export class SpeedTestEngine {
     connectionInfo: ConnectionInfo | null;
     location: NetworkTestResultLocation | null;
     network: ResolvedSpeedTestNetwork;
+    testsRun: NetworkTestResultTestsRun;
     latencyData: LatencyTestData | null;
     downloadEstimation: SpeedEstimationResult | null;
     downloadResult: SpeedTestData | null;
     uploadEstimation: SpeedEstimationResult | null;
     uploadResult: SpeedTestData | null;
-    downloadConnectionCount: number;
-    downloadMessageSizeKb: number;
-    uploadConnectionCount: number;
-    uploadMessageSizeKb: number;
+    downloadConnectionCount: number | null;
+    downloadMessageSizeKb: number | null;
+    uploadConnectionCount: number | null;
+    uploadMessageSizeKb: number | null;
     stages: NetworkTestResultStage[];
     failedReason: string | null;
     failedStage: string | null;
@@ -440,6 +448,7 @@ export class SpeedTestEngine {
       dateTime: new Date().toISOString(),
       connectionType: params.network.connectionType,
       externalIpAddress: params.connectionInfo?.client?.ip ?? null,
+      ispName: params.connectionInfo?.client?.asOrg ?? null,
       testStatus: params.failedStage ? 'failed' : 'passed',
       location: params.location,
       server: params.server,
@@ -482,8 +491,9 @@ export class SpeedTestEngine {
         testIndex: 0,
         testCount: 1,
         tag: 'other',
-        downloadTestDuration: this.config.downloadDurationMs,
-        uploadTestDuration: this.config.uploadDurationMs,
+        testsRun: params.testsRun,
+        downloadTestDuration: params.testsRun.download ? this.config.downloadDurationMs : null,
+        uploadTestDuration: params.testsRun.upload ? this.config.uploadDurationMs : null,
         testProtocol: 'WSS',
         downloadConnectionCount: params.downloadConnectionCount,
         uploadConnectionCount: params.uploadConnectionCount,

@@ -140,6 +140,12 @@ interface NetworkTestResultCoreSystemInfo {
 Describes execution mode and test tunables used for this run.
 
 ```ts
+interface NetworkTestResultTestsRun {
+  latency: boolean;
+  download: boolean;
+  upload: boolean;
+}
+
 interface NetworkTestResultTestType {
   id: string;
   sessionId: string;
@@ -147,6 +153,7 @@ interface NetworkTestResultTestType {
   testIndex: number | null;
   testCount: number | null;
   tag: LocationTag;
+  testsRun: NetworkTestResultTestsRun;
   downloadTestDuration: number | null;
   uploadTestDuration: number | null;
   testProtocol: string;
@@ -162,10 +169,11 @@ Frequently used fields:
 - `id`: unique per test run
 - `sessionId`: stable per engine instance/session
 - `type`: currently `single`
-- `downloadTestDuration` and `uploadTestDuration`
+- `testsRun`: flags indicating which of the three test phases (latency, download, upload) were enabled for this run
+- `downloadTestDuration` and `uploadTestDuration`: `null` when the corresponding test was not enabled
 - `testProtocol`: currently `WSS`
-- `downloadConnectionCount` and `uploadConnectionCount`
-- `downloadPacketSize` and `uploadPacketSize`
+- `downloadConnectionCount` and `uploadConnectionCount`: `null` when the corresponding test was not enabled or did not reach the estimation phase
+- `downloadPacketSize` and `uploadPacketSize`: `null` when the corresponding test was not enabled or did not reach the estimation phase
 
 ## `results`
 
@@ -176,6 +184,7 @@ interface NetworkTestResultResults {
   dateTime: string;
   connectionType: string | null;
   externalIpAddress: string | null;
+  ispName: string | null;
   testStatus: TestStatus;
   location: NetworkTestResultLocation | null;
   server: SpeedTestServer | null;
@@ -265,7 +274,16 @@ interface NetworkTestResultWiredInfo {
 }
 ```
 
-`cellular`, `wifi`, and `wired` are mutually exclusive in default resolution (`mobile`, `wifi`, or non-wireless fallback), but a custom `networkProvider` can override this behavior and set whichever blocks are needed.
+`ispName` is the ISP or organisation name derived from IP geolocation (`connectionInfo.client.asOrg`) and is available regardless of connection type. It duplicates the per-block carrier/ISP fields for convenience.
+
+`cellular`, `wifi`, and `wired` are mutually exclusive in default resolution. The active block is determined by the detected connection type:
+
+- `mobile` → `cellular` is populated, `wifi` and `wired` are `null`
+- `wifi` → `wifi` is populated, `cellular` and `wired` are `null`
+- `ethernet` → `wired` is populated, `cellular` and `wifi` are `null`
+- `bluetooth`, `none`, `unknown` → all three blocks are `null`
+
+A custom `networkProvider` can override this behaviour and set whichever blocks are needed.
 
 ### `results.measurements`
 
@@ -304,6 +322,7 @@ interface NetworkTestResultStage {
   dateTime: string;
   connectionType: string | null;
   externalIpAddress: string | null;
+  ispName: string | null;
   location: NetworkTestResultLocation | null;
   cellular: NetworkTestResultCellularInfo | null;
   wifi: NetworkTestResultWiFiInfo | null;

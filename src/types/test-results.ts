@@ -78,6 +78,12 @@ export interface NetworkTestResultCoreSystemInfo {
   memoryRssMb: number | null;
 }
 
+export interface NetworkTestResultTestsRun {
+  latency: boolean;
+  download: boolean;
+  upload: boolean;
+}
+
 export interface NetworkTestResultTestType {
   id: string;
   sessionId: string;
@@ -85,6 +91,7 @@ export interface NetworkTestResultTestType {
   testIndex: number | null;
   testCount: number | null;
   tag: LocationTag;
+  testsRun: NetworkTestResultTestsRun;
   downloadTestDuration: number | null;
   uploadTestDuration: number | null;
   testProtocol: string;
@@ -98,6 +105,7 @@ export interface NetworkTestResultResults {
   dateTime: string;
   connectionType: string | null;
   externalIpAddress: string | null;
+  ispName: string | null;
   testStatus: TestStatus;
   location: NetworkTestResultLocation | null;
   server: SpeedTestServer | null;
@@ -185,6 +193,7 @@ export interface NetworkTestResultStage {
   dateTime: string;
   connectionType: string | null;
   externalIpAddress: string | null;
+  ispName: string | null;
   location: NetworkTestResultLocation | null;
   cellular: NetworkTestResultCellularInfo | null;
   wifi: NetworkTestResultWiFiInfo | null;

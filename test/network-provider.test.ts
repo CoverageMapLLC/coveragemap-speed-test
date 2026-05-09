@@ -66,7 +66,7 @@ describe('defaultSpeedTestNetworkProvider', () => {
     expect(network.wired).toBeNull();
   });
 
-  it('builds wired defaults for non-wifi and non-mobile connection types', () => {
+  it('builds wired defaults for ethernet connection type', () => {
     const network = defaultSpeedTestNetworkProvider(context({ connectionType: 'ethernet' }));
     expect(network.connectionType).toBe('ethernet');
     expect(network.wired).toEqual({
@@ -77,6 +77,17 @@ describe('defaultSpeedTestNetworkProvider', () => {
     expect(network.wifi).toBeNull();
     expect(network.cellular).toBeNull();
   });
+
+  it.each(['unknown', 'bluetooth', 'none'] as const)(
+    'returns all-null network blocks for connection type "%s"',
+    (connectionType) => {
+      const network = defaultSpeedTestNetworkProvider(context({ connectionType }));
+      expect(network.connectionType).toBe(connectionType);
+      expect(network.wired).toBeNull();
+      expect(network.wifi).toBeNull();
+      expect(network.cellular).toBeNull();
+    }
+  );
 });
 
 describe('getNetworkInfo', () => {

@@ -110,12 +110,19 @@ function buildSnapshotForConnectionType(
         wifi: null,
         wired: null,
       };
-    default:
+    case 'ethernet':
       return {
         connectionType,
         cellular: null,
         wifi: null,
         wired: createDefaultWiredInfo(ispName),
+      };
+    default:
+      return {
+        connectionType,
+        cellular: null,
+        wifi: null,
+        wired: null,
       };
   }
 }
