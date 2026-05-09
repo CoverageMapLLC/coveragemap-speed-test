@@ -20,13 +20,25 @@ import { SpeedTestEngine } from '@coveragemap/speed-test';
   - [SpeedTestConfig](#speedtestconfig)
   - [DEFAULT\_CONFIG](#default_config)
   - [SpeedTestSelection](#speedtestselection)
-  - [SpeedTestLocation](#speedtestlocation)
-  - [SpeedTestLocationProvider](#speedtestlocationprovider)
-  - [SpeedTestNetworkProvider](#speedtestnetworkprovider)
 - [Callbacks](#callbacks)
   - [SpeedTestCallbacks](#speedtestcallbacks)
   - [SpeedTestStage](#speedteststage)
   - [Callback timing and order](#callback-timing-and-order)
+- [Providers](#providers)
+  - [Location provider](#location-provider)
+    - [SpeedTestLocation](#speedtestlocation)
+    - [SpeedTestLocationProvider](#speedtestlocationprovider)
+  - [Network provider](#network-provider)
+    - [SpeedTestNetworkProvider](#speedtestnetworkprovider)
+    - [SpeedTestNetworkProviderContext](#speedtestnetworkprovidercontext)
+    - [SpeedTestNetworkSnapshot](#speedtestnetworksnapshot)
+  - [Device metadata provider](#device-metadata-provider)
+    - [DeviceMetadataProvider](#devicemetadataprovider)
+    - [DefaultDeviceMetadataProvider](#defaultdevicemetadataprovider)
+    - [DeviceInfoConfigOverrides](#deviceinfoconfigoverrides)
+    - [CoreSystemOverrides](#coresystemoverrides)
+    - [setDeviceMetadataProvider](#setdevicemetadataprovider)
+    - [resetDeviceMetadataProvider](#resetdevicemetadataprovider)
 - [Data types](#data-types)
   - [SpeedTestServer](#speedtestserver)
   - [ConnectionInfo](#connectioninfo)
@@ -55,13 +67,6 @@ import { SpeedTestEngine } from '@coveragemap/speed-test';
 - [API clients](#api-clients)
   - [SpeedTestApiClient](#speedtestapiclient)
   - [API base URLs](#api-base-urls)
-- [Device metadata](#device-metadata)
-  - [DeviceMetadataProvider](#devicemetadataprovider)
-  - [DefaultDeviceMetadataProvider](#defaultdevicemetadataprovider)
-  - [DeviceInfoConfigOverrides](#deviceinfoconfigoverrides)
-  - [CoreSystemOverrides](#coresystemoverrides)
-  - [setDeviceMetadataProvider](#setdevicemetadataprovider)
-  - [resetDeviceMetadataProvider](#resetdevicemetadataprovider)
 - [Utilities](#utilities)
   - [CancellationToken](#cancellationtoken)
   - [CancellationError](#cancellationerror)
@@ -287,7 +292,7 @@ Updates the active network provider at runtime. Pass `null` to use default runti
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `provider` | `SpeedTestNetworkProvider \| null` | Yes | Provider callback applied to subsequent `run()` calls for `connectionType`, `cellular`, `wifi`, and `wired` payload fields. |
+| `provider` | `SpeedTestNetworkProvider \| null` | Yes | Provider object applied to subsequent `run()` calls for `connectionType`, `cellular`, `wifi`, and `wired` payload fields. |
 
 ---
 
@@ -348,79 +353,6 @@ interface SpeedTestSelection {
 | `upload` | `boolean` | `true` | Enables the upload estimation and sustained upload throughput stages. |
 
 At least one stage must be enabled. Constructing an engine with all three set to `false` throws immediately.
-
----
-
-### SpeedTestLocation
-
-Coordinates returned by a location provider.
-
-```ts
-interface SpeedTestLocation {
-  latitude: number;
-  longitude: number;
-  elevation?: number | null;
-  heading?: number | null;
-  speed?: number | null;
-}
-```
-
----
-
-### SpeedTestLocationProvider
-
-Callback type used by `SpeedTestEngineOptions.locationProvider` and `setLocationProvider()`.
-
-```ts
-interface SpeedTestLocationProviderContext {
-  connectionInfo: ConnectionInfo | null;
-}
-
-type SpeedTestLocationProvider = (context: SpeedTestLocationProviderContext) =>
-  | SpeedTestLocation
-  | null
-  | Promise<SpeedTestLocation | null>;
-```
-
-Return `null` when live location is unavailable so the engine can fall back to the default provider (IP lookup from `connectionInfo`).
-
----
-
-### SpeedTestNetworkProvider
-
-Callback type used by `SpeedTestEngineOptions.networkProvider` and `setNetworkProvider()`.
-
-```ts
-interface SpeedTestNetworkSnapshot {
-  connectionType: ConnectionType;
-  cellular: NetworkTestResultCellularInfo | null;
-  wifi: NetworkTestResultWiFiInfo | null;
-  wired: NetworkTestResultWiredInfo | null;
-}
-
-interface SpeedTestNetworkProviderContext {
-  connectionInfo: ConnectionInfo | null;
-  connectionType: ConnectionType;
-  effectiveType: string | null;
-  downlinkMbps: number | null;
-  rttMs: number | null;
-  saveDataEnabled: boolean;
-}
-
-interface SpeedTestNetworkOverrides {
-  connectionType?: ConnectionType | null;
-  cellular?: Partial<NetworkTestResultCellularInfo> | null;
-  wifi?: Partial<NetworkTestResultWiFiInfo> | null;
-  wired?: Partial<NetworkTestResultWiredInfo> | null;
-}
-
-type SpeedTestNetworkProvider = (context: SpeedTestNetworkProviderContext) =>
-  | SpeedTestNetworkOverrides
-  | null
-  | Promise<SpeedTestNetworkOverrides | null>;
-```
-
-Provider output is merged onto the default runtime-derived snapshot. This enables overriding only specific network fields while preserving the rest of the payload.
 
 ---
 
@@ -506,6 +438,277 @@ Typical successful progression for a full run:
 On failure: `onError(error, stage)` is emitted; subsequent stages do not run.
 
 On cancellation: no `onError` is emitted; the result payload records the cancellation.
+
+---
+
+## Providers
+
+The engine exposes three optional provider hooks for supplying context it cannot derive on its own. Each provider is registered via a dedicated engine method and can be swapped at runtime between runs.
+
+---
+
+### Location provider
+
+The location provider tells the engine where the test device is. Coordinates are used for server selection and stamped into `results.location` in the result payload. Registered via `setLocationProvider()`.
+
+#### SpeedTestLocation
+
+Coordinates returned by a location provider.
+
+```ts
+interface SpeedTestLocation {
+  latitude: number;
+  longitude: number;
+  elevation?: number | null;
+  heading?: number | null;
+  speed?: number | null;
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `latitude` | `number` | Yes | Geographic latitude in decimal degrees. |
+| `longitude` | `number` | Yes | Geographic longitude in decimal degrees. |
+| `elevation` | `number \| null` | No | Altitude in meters above sea level. |
+| `heading` | `number \| null` | No | Compass heading in degrees (0–360). |
+| `speed` | `number \| null` | No | Movement speed in m/s. |
+
+---
+
+#### SpeedTestLocationProvider
+
+Callback type used by `setLocationProvider()`. The provider receives connection metadata and returns coordinates or `null`.
+
+```ts
+interface SpeedTestLocationProviderContext {
+  connectionInfo: ConnectionInfo | null;
+}
+
+type SpeedTestLocationProvider = (context: SpeedTestLocationProviderContext) =>
+  | SpeedTestLocation
+  | null
+  | Promise<SpeedTestLocation | null>;
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `connectionInfo` | `ConnectionInfo \| null` | IP connection metadata fetched at run start. Available as a fallback source for coordinates. |
+
+Return `null` when live location is unavailable. The engine silently falls back to IP geolocation from `connectionInfo`. `results.location.locationType` will be `'ip'` in that case; when coordinates are provided by a provider it will be `'device'`.
+
+---
+
+### Network provider
+
+The network provider supplies connection type and detailed signal metadata for cellular, Wi-Fi, and wired connections. Output is written into the `connectionType`, `cellular`, `wifi`, and `wired` fields of the result payload. Registered via `setNetworkProvider()`.
+
+#### SpeedTestNetworkProvider
+
+Object interface used by `setNetworkProvider()`. Implement only the methods you need — the engine falls back to its default detection for any method not present on the object.
+
+```ts
+interface SpeedTestNetworkProvider {
+  getConnectionType?(context: SpeedTestNetworkProviderContext): ConnectionType | null | Promise<ConnectionType | null>;
+  getCellularMetadata?(context: SpeedTestNetworkProviderContext): Partial<NetworkTestResultCellularInfo> | null | Promise<Partial<NetworkTestResultCellularInfo> | null>;
+  getWifiMetadata?(context: SpeedTestNetworkProviderContext): Partial<NetworkTestResultWiFiInfo> | null | Promise<Partial<NetworkTestResultWiFiInfo> | null>;
+  getWiredMetadata?(context: SpeedTestNetworkProviderContext): Partial<NetworkTestResultWiredInfo> | null | Promise<Partial<NetworkTestResultWiredInfo> | null>;
+}
+```
+
+| Method | Return type | Description |
+|--------|-------------|-------------|
+| `getConnectionType?(context)` | `ConnectionType \| null` | Override the runtime-detected connection type. Return `null` to keep the default. |
+| `getCellularMetadata?(context)` | `Partial<NetworkTestResultCellularInfo> \| null` | Supply cellular signal fields. Return `null` to force the `cellular` block to `null`. |
+| `getWifiMetadata?(context)` | `Partial<NetworkTestResultWiFiInfo> \| null` | Supply Wi-Fi signal fields. Return `null` to force the `wifi` block to `null`. |
+| `getWiredMetadata?(context)` | `Partial<NetworkTestResultWiredInfo> \| null` | Supply wired link fields. Return `null` to force the `wired` block to `null`. |
+
+Each method is called independently. Methods not present on the object leave their corresponding payload block at its runtime-derived default. Partial return values are merged onto the default — only the fields you return are overwritten.
+
+---
+
+#### SpeedTestNetworkProviderContext
+
+Passed to each network provider method. Contains the runtime-detected network state available before the provider is consulted.
+
+```ts
+interface SpeedTestNetworkProviderContext {
+  connectionInfo: ConnectionInfo | null;
+  connectionType: ConnectionType;
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `connectionInfo` | `ConnectionInfo \| null` | IP connection metadata from `/v1/connection`. |
+| `connectionType` | `ConnectionType` | Runtime-detected connection type (`'wifi'`, `'mobile'`, `'ethernet'`, etc.). |
+
+---
+
+#### SpeedTestNetworkSnapshot
+
+The resolved network state assembled by the engine after applying provider overrides.
+
+```ts
+interface SpeedTestNetworkSnapshot {
+  connectionType: ConnectionType;
+  cellular: NetworkTestResultCellularInfo | null;
+  wifi: NetworkTestResultWiFiInfo | null;
+  wired: NetworkTestResultWiredInfo | null;
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `connectionType` | `ConnectionType` | Final resolved connection type written to the result payload. |
+| `cellular` | `NetworkTestResultCellularInfo \| null` | Cellular signal metadata, present when connection type is mobile. |
+| `wifi` | `NetworkTestResultWiFiInfo \| null` | Wi-Fi metadata, present when connection type is Wi-Fi. |
+| `wired` | `NetworkTestResultWiredInfo \| null` | Wired link metadata, present when connection type is ethernet or unknown. |
+
+---
+
+### Device metadata provider
+
+The device metadata provider controls how the engine identifies the device and assembles the `device` block in the result payload — device ID, browser name, OS, connection type, and host telemetry. Registered via `setDeviceMetadataProvider()`.
+
+#### DeviceMetadataProvider
+
+Interface for custom device metadata implementations. Replace the built-in provider when running in non-standard runtimes (Electron, React Native, serverless, host-bridged environments).
+
+```ts
+interface DeviceMetadataProvider {
+  reset(): void;
+  getDeviceId(config: DeviceMetadataProviderConfig): string;
+  parseBrowserInfo(): ParsedBrowserInfo;
+  parseOSInfo(): ParsedOSInfo;
+  getConnectionType(): ConnectionType;
+  getBrowserInfo(): BrowserInfo;
+  buildDeviceResult(config: DeviceMetadataProviderConfig): NetworkTestResultDevice;
+}
+```
+
+| Method | Return type | Description |
+|--------|-------------|-------------|
+| `reset()` | `void` | Clears any cached state in the provider. Called at the start of each run. |
+| `getDeviceId(config)` | `string` | Returns a persistent device identifier. |
+| `parseBrowserInfo()` | `ParsedBrowserInfo` | Parses browser name, version, and engine. |
+| `parseOSInfo()` | `ParsedOSInfo` | Parses OS name and version. |
+| `getConnectionType()` | `ConnectionType` | Detects the active connection type. |
+| `getBrowserInfo()` | `BrowserInfo` | Returns the full browser fingerprint. |
+| `buildDeviceResult(config)` | `NetworkTestResultDevice` | Assembles the complete device metadata payload written to the result. |
+
+**`DeviceMetadataProviderConfig`**
+
+```ts
+interface DeviceMetadataProviderConfig {
+  deviceIdStorageKey: string;
+  application: NetworkTestResultApplicationInfo;
+  coreSystem: CoreSystemOverrides;
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `deviceIdStorageKey` | `string` | Storage key used to persist the device identifier. |
+| `application` | `NetworkTestResultApplicationInfo` | Application metadata from the engine constructor options. |
+| `coreSystem` | `CoreSystemOverrides` | Host-level telemetry overrides from `options.deviceInfo.coreSystem`. |
+
+---
+
+#### DefaultDeviceMetadataProvider
+
+The built-in implementation using `ua-parser-js` and browser/Node.js APIs. Registered automatically when using `SpeedTestEngine`.
+
+```ts
+import { DefaultDeviceMetadataProvider } from '@coveragemap/speed-test';
+
+const provider = new DefaultDeviceMetadataProvider();
+```
+
+Implements all methods of `DeviceMetadataProvider`. Reads device identity from `localStorage`, detects browser and OS from `navigator.userAgent`, and reads host telemetry from `process` in Node.js environments. Replace it via `setDeviceMetadataProvider()` when default detection is insufficient for your runtime.
+
+---
+
+#### DeviceInfoConfigOverrides
+
+Passed as `options.deviceInfo` to the engine constructor. Controls device ID persistence and host-level telemetry without replacing the full provider.
+
+```ts
+interface DeviceInfoConfigOverrides {
+  deviceIdStorageKey?: string;
+  coreSystem?: CoreSystemOverrides;
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `deviceIdStorageKey` | `string` | Local storage key used to persist the device identifier across sessions. Defaults to an internal key. |
+| `coreSystem` | `CoreSystemOverrides` | Overrides for host-level telemetry fields merged onto the auto-detected `device.coreSystem` block. |
+
+---
+
+#### CoreSystemOverrides
+
+Optional overrides for host-level telemetry fields. Useful for backend and worker contexts where runtime-derived values are incomplete or unavailable.
+
+```ts
+interface CoreSystemOverrides {
+  hostName?: string | null;
+  processId?: number | null;
+  platform?: string | null;
+  architecture?: string | null;
+  runtimeVersion?: string | null;
+  uptimeSeconds?: number | null;
+  memoryRssMb?: number | null;
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `hostName` | `string \| null` | Machine hostname to emit in the result payload. |
+| `processId` | `number \| null` | OS process identifier. |
+| `platform` | `string \| null` | Runtime platform label (e.g. `'linux'`, `'win32'`). |
+| `architecture` | `string \| null` | CPU architecture (e.g. `'x64'`, `'arm64'`). |
+| `runtimeVersion` | `string \| null` | Runtime version string (e.g. Node.js version). |
+| `uptimeSeconds` | `number \| null` | Process uptime in seconds. |
+| `memoryRssMb` | `number \| null` | Resident set size memory in MB. |
+
+---
+
+#### setDeviceMetadataProvider
+
+```ts
+setDeviceMetadataProvider(provider: DeviceMetadataProvider): void
+```
+
+Replaces the active device metadata provider with a custom implementation. Must be called before `run()` to take effect.
+
+```ts
+import { SpeedTestEngine } from '@coveragemap/speed-test';
+import type { DeviceMetadataProvider } from '@coveragemap/speed-test';
+
+class MyProvider implements DeviceMetadataProvider {
+  // implement all required methods ...
+}
+
+const engine = new SpeedTestEngine({ application: { ... } });
+engine.setDeviceMetadataProvider(new MyProvider());
+
+await engine.run();
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `provider` | `DeviceMetadataProvider` | Custom provider instance to use for all subsequent runs. |
+
+---
+
+#### resetDeviceMetadataProvider
+
+```ts
+resetDeviceMetadataProvider(): void
+```
+
+Restores the built-in `DefaultDeviceMetadataProvider`, discarding any custom provider previously registered via `setDeviceMetadataProvider()`.
 
 ---
 
@@ -1175,144 +1378,6 @@ function getCoverageMapApiBaseUrl(overrides?: ApiBaseUrlOverrides): string;
 `SpeedTestEngineOptions.api`, `SpeedTestApiClient`, and `CoverageMapApiClient` all accept the same optional override shape. Helpers return the resolved HTTPS base URL (trailing slashes stripped), using CoverageMap production hosts when a field is omitted.
 
 `CoverageMapApiClient` constructor: `new CoverageMapApiClient(overrides?: ApiBaseUrlOverrides)`.
-
----
-
-## Device metadata
-
-### DeviceMetadataProvider
-
-Interface for custom device metadata implementations. Replace the default browser-based provider when running in non-standard runtimes (serverless, embedded, host-bridged environments).
-
-```ts
-interface DeviceMetadataProvider {
-  reset(): void;
-  getDeviceId(config: DeviceMetadataProviderConfig): string;
-  parseBrowserInfo(): ParsedBrowserInfo;
-  parseOSInfo(): ParsedOSInfo;
-  getConnectionType(): ConnectionType;
-  getBrowserInfo(): BrowserInfo;
-  buildDeviceResult(config: DeviceMetadataProviderConfig): NetworkTestResultDevice;
-}
-```
-
-| Method | Return type | Description |
-|--------|-------------|-------------|
-| `reset()` | `void` | Clears any cached state in the provider. |
-| `getDeviceId(config)` | `string` | Returns a persistent device identifier. |
-| `parseBrowserInfo()` | `ParsedBrowserInfo` | Parses browser name, version, and engine. |
-| `parseOSInfo()` | `ParsedOSInfo` | Parses OS name and version. |
-| `getConnectionType()` | `ConnectionType` | Detects connection type. |
-| `getBrowserInfo()` | `BrowserInfo` | Returns full browser fingerprint. |
-| `buildDeviceResult(config)` | `NetworkTestResultDevice` | Assembles the complete device metadata payload. |
-
-**`DeviceMetadataProviderConfig`**
-
-```ts
-interface DeviceMetadataProviderConfig {
-  deviceIdStorageKey: string;
-  application: NetworkTestResultApplicationInfo;
-  coreSystem: CoreSystemOverrides;
-}
-```
-
----
-
-### DefaultDeviceMetadataProvider
-
-The built-in implementation using `ua-parser-js` and browser APIs. Registered automatically when using `SpeedTestEngine`.
-
-```ts
-import { DefaultDeviceMetadataProvider } from '@coveragemap/speed-test';
-
-const provider = new DefaultDeviceMetadataProvider();
-```
-
-Implements all methods of `DeviceMetadataProvider`. Replace it via `setDeviceMetadataProvider()` when the default browser-based detection is insufficient.
-
----
-
-### DeviceInfoConfigOverrides
-
-Passed as `options.deviceInfo` to the engine constructor.
-
-```ts
-interface DeviceInfoConfigOverrides {
-  deviceIdStorageKey?: string;
-  coreSystem?: CoreSystemOverrides;
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `deviceIdStorageKey` | `string` | Local storage key used to persist the device identifier across sessions. Defaults to an internal key. |
-| `coreSystem` | `CoreSystemOverrides` | Overrides for host-level telemetry fields. |
-
----
-
-### CoreSystemOverrides
-
-Optional overrides for host-level telemetry. Useful for backend and worker contexts where runtime-derived values are incomplete.
-
-```ts
-interface CoreSystemOverrides {
-  hostName?: string | null;
-  processId?: number | null;
-  platform?: string | null;
-  architecture?: string | null;
-  runtimeVersion?: string | null;
-  uptimeSeconds?: number | null;
-  memoryRssMb?: number | null;
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `hostName` | `string \| null` | Hostname to emit in the result payload. |
-| `processId` | `number \| null` | OS process identifier. |
-| `platform` | `string \| null` | Runtime platform label (e.g. `'linux'`). |
-| `architecture` | `string \| null` | CPU architecture (e.g. `'x64'`). |
-| `runtimeVersion` | `string \| null` | Runtime version string (e.g. Node.js version). |
-| `uptimeSeconds` | `number \| null` | Process uptime in seconds. |
-| `memoryRssMb` | `number \| null` | Resident set size memory in MB. |
-
----
-
-### setDeviceMetadataProvider
-
-```ts
-setDeviceMetadataProvider(provider: DeviceMetadataProvider): void
-```
-
-Replaces the active device metadata provider with a custom implementation. Must be called before `run()` to take effect. Implement the `DeviceMetadataProvider` interface to control how device identity, browser, OS, and connection telemetry are collected — useful in server-side, React Native, or Electron environments where the default browser-based detection is unavailable or inaccurate.
-
-```ts
-import { SpeedTestEngine } from '@coveragemap/speed-test';
-import type { DeviceMetadataProvider } from '@coveragemap/speed-test';
-
-class MyProvider implements DeviceMetadataProvider {
-  // implement all required methods ...
-}
-
-const engine = new SpeedTestEngine({ application: { ... } });
-engine.setDeviceMetadataProvider(new MyProvider());
-
-await engine.run();
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `provider` | `DeviceMetadataProvider` | Custom provider instance to use for all subsequent runs. |
-
----
-
-### resetDeviceMetadataProvider
-
-```ts
-resetDeviceMetadataProvider(): void
-```
-
-Restores the built-in `DefaultDeviceMetadataProvider`, discarding any custom provider previously set via `setDeviceMetadataProvider()`.
 
 ---
 

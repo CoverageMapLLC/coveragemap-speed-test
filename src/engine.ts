@@ -178,11 +178,14 @@ export class SpeedTestEngine {
 
     let connectionInfo: ConnectionInfo | null = null;
     let location: NetworkTestResultLocation | null = null;
+    let lastLocation: NetworkTestResultLocation | null = null;
 
     try {
       connectionInfo = await this.getConnectionInfo();
       location = await this.acquireLocation(connectionInfo);
+      lastLocation = location;
       const network = await this.acquireNetwork(connectionInfo);
+      let lastNetwork = network;
       if (typeof server === 'string') {
         targetServer = await this.resolveServerById(server);
       } else if (!targetServer) {
@@ -190,23 +193,29 @@ export class SpeedTestEngine {
       }
       const serverUrl = getServerWsUrl(targetServer);
 
-      const buildStage = (testStage: string): NetworkTestResultStage => ({
-        testStage,
-        dateTime: new Date().toISOString(),
-        connectionType: network.connectionType,
-        localIpAddress: null,
-        externalIpAddress: connectionInfo?.client?.ip ?? null,
-        vpnEnabled: false,
-        location,
-        cellular: network.cellular,
-        wifi: network.wifi,
-        wired: network.wired,
-      });
+      const buildStage = async (testStage: string): Promise<NetworkTestResultStage> => {
+        if (this.locationProvider) {
+          lastLocation = await this.acquireLocation(connectionInfo);
+        }
+        if (this.networkProvider) {
+          lastNetwork = await this.acquireNetwork(connectionInfo);
+        }
+        return {
+          testStage,
+          dateTime: new Date().toISOString(),
+          connectionType: lastNetwork.connectionType,
+          externalIpAddress: connectionInfo?.client?.ip ?? null,
+          location: lastLocation,
+          cellular: lastNetwork.cellular,
+          wifi: lastNetwork.wifi,
+          wired: lastNetwork.wired,
+        };
+      };
 
       try {
         if (this.tests.latency) {
           this.setStage('latency');
-          stages.push(buildStage('latencyStart'));
+          stages.push(await buildStage('latencyStart'));
           latencyData = await runLatencyTest({
             serverUrl,
             pingCount: this.config.pingCount,
@@ -228,7 +237,7 @@ export class SpeedTestEngine {
 
         if (this.tests.download) {
           this.setStage('downloadEstimation');
-          stages.push(buildStage('downloadStart'));
+          stages.push(await buildStage('downloadStart'));
           downloadEstimation = await runDownloadEstimationTest({
             serverUrl,
             latencyMs,
@@ -251,7 +260,7 @@ export class SpeedTestEngine {
             onSnapshot: (snapshot) => this.callbacks.onDownloadProgress?.(snapshot),
           });
           this.callbacks.onDownloadResult?.(downloadResult);
-          stages.push(buildStage('downloadEnd'));
+          stages.push(await buildStage('downloadEnd'));
         }
 
         if (this.tests.upload) {
@@ -260,7 +269,7 @@ export class SpeedTestEngine {
           }
 
           this.setStage('uploadEstimation');
-          stages.push(buildStage('uploadStart'));
+          stages.push(await buildStage('uploadStart'));
           uploadEstimation = await runUploadEstimationTest({
             serverUrl,
             latencyMs,
@@ -283,7 +292,7 @@ export class SpeedTestEngine {
             onSnapshot: (snapshot) => this.callbacks.onUploadProgress?.(snapshot),
           });
           this.callbacks.onUploadResult?.(uploadResult);
-          stages.push(buildStage('uploadEnd'));
+          stages.push(await buildStage('uploadEnd'));
         }
       } catch (error) {
         if (error instanceof CancellationError) {
@@ -301,8 +310,8 @@ export class SpeedTestEngine {
         startTime,
         server: targetServer,
         connectionInfo,
-        location,
-        network,
+        location: lastLocation,
+        network: lastNetwork,
         latencyData,
         downloadEstimation,
         downloadResult,
@@ -430,9 +439,7 @@ export class SpeedTestEngine {
     const results: NetworkTestResultResults = {
       dateTime: new Date().toISOString(),
       connectionType: params.network.connectionType,
-      localIpAddress: null,
       externalIpAddress: params.connectionInfo?.client?.ip ?? null,
-      vpnEnabled: false,
       testStatus: params.failedStage ? 'failed' : 'passed',
       location: params.location,
       server: params.server,

@@ -700,4 +700,107 @@ describe('engine regression', () => {
     expect(mocks.setLocationProviderMock).toHaveBeenLastCalledWith(null);
   });
 
+  it('calls location provider at every stage boundary when a device provider is set', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    let callIndex = 0;
+    const locationProvider = vi.fn().mockImplementation(() => {
+      callIndex++;
+      return Promise.resolve({ latitude: 40 + callIndex * 0.01, longitude: -74 });
+    });
+    engine.setLocationProvider(locationProvider);
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // Provider is called once upfront (server selection) + once per stage boundary.
+    // Default test selection: latencyStart, downloadStart, downloadEnd, uploadStart, uploadEnd = 5 stage calls.
+    // Total = 1 (initial) + 5 (stage boundaries) = 6 calls.
+    expect(locationProvider.mock.calls.length).toBe(6);
+
+    // Each stage record should have a distinct location stamped at that boundary.
+    const latitudes = result.stages?.map((s) => s.location?.latitude) ?? [];
+    const uniqueLatitudes = new Set(latitudes);
+    expect(uniqueLatitudes.size).toBe(result.stages?.length);
+
+    // The final result location is the last acquired (uploadEnd), not the initial one.
+    const lastStageLatitude = result.stages?.at(-1)?.location?.latitude;
+    expect(result.results.location?.latitude).toBe(lastStageLatitude);
+  });
+
+  it('re-resolves network provider at every stage boundary when a network provider is set', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    let callIndex = 0;
+    engine.setNetworkProvider({
+      getConnectionType: () => 'wifi',
+      getWifiMetadata: () => {
+        callIndex++;
+        return { ssidName: `WiFi-${callIndex}`, channelNumber: callIndex };
+      },
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // Each stage record should have a distinct ssidName stamped at that boundary.
+    const ssids = result.stages?.map((s) => s.wifi?.ssidName) ?? [];
+    const uniqueSsids = new Set(ssids);
+    expect(uniqueSsids.size).toBe(result.stages?.length);
+
+    // The final result reflects the last-resolved network (uploadEnd).
+    const lastStageSsid = result.stages?.at(-1)?.wifi?.ssidName;
+    expect(result.results.wifi?.ssidName).toBe(lastStageSsid);
+  });
+
+  it('calls location provider once when no provider is set (IP fallback)', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+    // No setLocationProvider — relies on IP geolocation from getConnectionInfo
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    // All stage records share the same IP-derived location object.
+    const latitudes = result.stages?.map((s) => s.location?.latitude) ?? [];
+    expect(latitudes.every((lat) => lat === latitudes[0])).toBe(true);
+  });
 });

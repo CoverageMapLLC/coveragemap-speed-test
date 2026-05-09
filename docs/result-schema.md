@@ -175,9 +175,7 @@ Contains environmental context and measured outputs.
 interface NetworkTestResultResults {
   dateTime: string;
   connectionType: string | null;
-  localIpAddress: string | null;
   externalIpAddress: string | null;
-  vpnEnabled: boolean | null;
   testStatus: TestStatus;
   location: NetworkTestResultLocation | null;
   server: SpeedTestServer | null;
@@ -305,9 +303,7 @@ interface NetworkTestResultStage {
   testStage: string;
   dateTime: string;
   connectionType: string | null;
-  localIpAddress: string | null;
   externalIpAddress: string | null;
-  vpnEnabled: boolean | null;
   location: NetworkTestResultLocation | null;
   cellular: NetworkTestResultCellularInfo | null;
   wifi: NetworkTestResultWiFiInfo | null;

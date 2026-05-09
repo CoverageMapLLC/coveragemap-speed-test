@@ -132,7 +132,7 @@ const result: NetworkTestResultTestResults = await engine.run();
 
 ### Run with location binding
 
-Register a location provider via `setLocationProvider()` so `run()` resolves coordinates once and **binds** them to the payload: `results.location`, each `stages[]` row, and the uploaded result. Values from the provider use `locationType: 'device'`. If the provider returns `null` or throws, the engine uses IP geolocation from `getConnectionInfo()` instead (`locationType: 'ip'`). The same resolved position is also used to pick the nearest server when you call `run()` with no server argument.
+Register a location provider via `setLocationProvider()` so `run()` resolves coordinates as needed and **binds** them to the payload: `results.location`, each `stages[]` row, and the uploaded result. Values from the provider use `locationType: 'device'`. If the provider returns `null` or throws, the engine uses IP geolocation from `getConnectionInfo()` instead (`locationType: 'ip'`). The same resolved position is also used to pick the nearest server when you call `run()` with no server argument.
 
 ```ts
 import { SpeedTestEngine } from '@coveragemap/speed-test';
@@ -288,7 +288,7 @@ engine.setNetworkProvider({
 
 ### Nearest server via IP location
 
-Without a `locationProvider`, `getServers()` ranks endpoints using coordinates from `getConnectionInfo()` (IP-based client location from the Speed API). Fetch the ordered list, then pass the first entry to `run()` (or call `run()` with no arguments — the engine uses the same list ordering internally).
+By defatul (without a `locationProvider`), `getServers()` ranks endpoints using coordinates from `getConnectionInfo()` (IP-based client location from the Speed API). Fetch the ordered list, then pass the first entry to `run()` (or call `run()` with no arguments — the engine uses the same list ordering internally).
 
 ```ts
 import { SpeedTestEngine } from '@coveragemap/speed-test';
