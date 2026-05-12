@@ -508,6 +508,7 @@ describe('engine regression', () => {
     expect(result.results.measurements.failedReason).toBe('Cancelled');
     expect(result.results.measurements.failedStage).toBe('latency');
     expect(onError).not.toHaveBeenCalled();
+    expect(mocks.uploadResultsMock).not.toHaveBeenCalled();
   });
 
   it('prevents concurrent runs while a test is already active', async () => {

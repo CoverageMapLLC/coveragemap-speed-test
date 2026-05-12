@@ -15,6 +15,7 @@ export interface UploadSpeedTestOptions {
 }
 
 const MAX_CHUNK_SIZE = 1024 * 1024;
+const MIN_SNAPSHOT_WINDOW_MS = 300;
 
 export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promise<SpeedTestData> {
   const {
@@ -31,7 +32,7 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
 
   return new Promise<SpeedTestData>((resolve, reject) => {
     const sockets: WebSocket[] = [];
-    let totalBytes = 0;
+    let acknowledgedBytes = 0;
     let testStartTime: number | null = null;
     let settled = false;
     let connectedCount = 0;
@@ -41,6 +42,9 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
     const adjustmentMs = latencyMs + jitterMs;
     const bufferSizeKb = Math.max(messageSizeKb * 8, 1024);
     const messageBytes = messageSizeKb * 1024;
+    const pendingBytesBySocket = new Map<WebSocket, number[]>();
+    const ackEvents: Array<{ timeMs: number; bytes: number }> = [];
+    let ackBytesInWindow = 0;
 
     const cleanup = () => {
       if (snapshotTimer) clearInterval(snapshotTimer);
@@ -71,12 +75,12 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
       }
       const elapsed = performance.now() - testStartTime;
       const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
-      const speedMbps = calculateSpeedMbps(totalBytes, effectiveDurationMs);
+      const speedMbps = calculateSpeedMbps(acknowledgedBytes, effectiveDurationMs);
 
       settle(resolve, {
         durationMs: elapsed,
         speedMbps,
-        bytes: totalBytes,
+        bytes: acknowledgedBytes,
         snapshots,
       });
     };
@@ -103,10 +107,11 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
       for (const socket of sockets) {
         if (socket.readyState !== WebSocket.OPEN) continue;
         if (socket.bufferedAmount > bufferSizeKb * 1024) continue;
+        const pendingBytes = pendingBytesBySocket.get(socket);
         for (const chunk of chunks) {
           try {
             socket.send(chunk);
-            totalBytes += chunk.byteLength;
+            pendingBytes?.push(chunk.byteLength);
           } catch {
             // ignore send errors during burst
           }
@@ -119,13 +124,22 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
 
       snapshotTimer = setInterval(() => {
         if (!testStartTime || settled) return;
-        const elapsed = performance.now() - testStartTime;
-        const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
-        const speedMbps = calculateSpeedMbps(totalBytes, effectiveDurationMs);
+        const now = performance.now();
+        const elapsed = now - testStartTime;
+        const snapshotWindowMs = Math.max(snapshotIntervalMs * 3, MIN_SNAPSHOT_WINDOW_MS);
+        const cutoffTime = now - snapshotWindowMs;
+        while (ackEvents.length > 0 && ackEvents[0].timeMs < cutoffTime) {
+          const expired = ackEvents.shift();
+          if (expired) ackBytesInWindow -= expired.bytes;
+        }
+
+        const effectiveWindowMs = Math.max(Math.min(elapsed, snapshotWindowMs), 1);
+        const speedMbps = calculateSpeedMbps(Math.max(ackBytesInWindow, 0), effectiveWindowMs);
+
         const snapshot: SpeedSnapshot = {
           timeOffsetMs: elapsed,
           speedMbps,
-          bytes: totalBytes,
+          bytes: acknowledgedBytes,
         };
         snapshots.push(snapshot);
         onSnapshot?.(snapshot);
@@ -143,6 +157,7 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
       try {
         const socket = new WebSocket(serverUrl);
         socket.binaryType = 'arraybuffer';
+        pendingBytesBySocket.set(socket, []);
 
         socket.onopen = () => {
           connectedCount++;
@@ -151,8 +166,15 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
           }
         };
 
-        socket.onmessage = () => {
-          // ACKs received, no tracking needed for total throughput
+        socket.onmessage = (event) => {
+          if (typeof event.data !== 'string' || event.data !== 'ACK') return;
+          const pendingBytes = pendingBytesBySocket.get(socket);
+          const acknowledgedChunkSize = pendingBytes?.shift();
+          if (acknowledgedChunkSize === undefined) return;
+          acknowledgedBytes += acknowledgedChunkSize;
+          const ackTime = performance.now();
+          ackEvents.push({ timeMs: ackTime, bytes: acknowledgedChunkSize });
+          ackBytesInWindow += acknowledgedChunkSize;
         };
 
         socket.onerror = () => {
