@@ -38,7 +38,6 @@ import { SpeedTestEngine } from '@coveragemap/speed-test';
     - [DeviceInfoConfigOverrides](#deviceinfoconfigoverrides)
     - [CoreSystemOverrides](#coresystemoverrides)
     - [setDeviceMetadataProvider](#setdevicemetadataprovider)
-    - [resetDeviceMetadataProvider](#resetdevicemetadataprovider)
 - [Data types](#data-types)
   - [SpeedTestServer](#speedtestserver)
   - [ConnectionInfo](#connectioninfo)
@@ -293,6 +292,20 @@ Updates the active network provider at runtime. Pass `null` to use default runti
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `provider` | `SpeedTestNetworkProvider \| null` | Yes | Provider object applied to subsequent `run()` calls for `connectionType`, `cellular`, `wifi`, and `wired` payload fields. |
+
+---
+
+#### `setDeviceMetadataProvider(provider)`
+
+```ts
+setDeviceMetadataProvider(provider: DeviceMetadataProvider | null): void
+```
+
+Replaces the active device metadata provider with a custom implementation. Takes effect immediately; all subsequent `run()` calls use the new provider. Pass `null` to discard any custom provider and restore the built-in `DefaultDeviceMetadataProvider`. See [`DeviceMetadataProvider`](#devicemetadataprovider) for the interface and [`providers.md`](./providers.md#device-metadata-provider) for a full implementation guide.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `provider` | `DeviceMetadataProvider \| null` | Yes | Custom provider to use for subsequent runs, or `null` to restore the default. |
 
 ---
 
@@ -580,7 +593,6 @@ interface DeviceMetadataProvider {
   getDeviceId(config: DeviceMetadataProviderConfig): string;
   parseBrowserInfo(): ParsedBrowserInfo;
   parseOSInfo(): ParsedOSInfo;
-  getConnectionType(): ConnectionType;
   getBrowserInfo(): BrowserInfo;
   buildDeviceResult(config: DeviceMetadataProviderConfig): NetworkTestResultDevice;
 }
@@ -592,7 +604,6 @@ interface DeviceMetadataProvider {
 | `getDeviceId(config)` | `string` | Returns a persistent device identifier. |
 | `parseBrowserInfo()` | `ParsedBrowserInfo` | Parses browser name, version, and engine. |
 | `parseOSInfo()` | `ParsedOSInfo` | Parses OS name and version. |
-| `getConnectionType()` | `ConnectionType` | Detects the active connection type. |
 | `getBrowserInfo()` | `BrowserInfo` | Returns the full browser fingerprint. |
 | `buildDeviceResult(config)` | `NetworkTestResultDevice` | Assembles the complete device metadata payload written to the result. |
 
@@ -677,10 +688,10 @@ interface CoreSystemOverrides {
 #### setDeviceMetadataProvider
 
 ```ts
-setDeviceMetadataProvider(provider: DeviceMetadataProvider): void
+setDeviceMetadataProvider(provider: DeviceMetadataProvider | null): void
 ```
 
-Replaces the active device metadata provider with a custom implementation. Must be called before `run()` to take effect.
+Replaces the active device metadata provider with a custom implementation. Must be called before `run()` to take effect. Pass `null` to restore the built-in `DefaultDeviceMetadataProvider`.
 
 ```ts
 import { SpeedTestEngine } from '@coveragemap/speed-test';
@@ -694,21 +705,14 @@ const engine = new SpeedTestEngine({ application: { ... } });
 engine.setDeviceMetadataProvider(new MyProvider());
 
 await engine.run();
+
+// restore the default provider
+engine.setDeviceMetadataProvider(null);
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | `DeviceMetadataProvider` | Custom provider instance to use for all subsequent runs. |
-
----
-
-#### resetDeviceMetadataProvider
-
-```ts
-resetDeviceMetadataProvider(): void
-```
-
-Restores the built-in `DefaultDeviceMetadataProvider`, discarding any custom provider previously registered via `setDeviceMetadataProvider()`.
+| `provider` | `DeviceMetadataProvider \| null` | Custom provider instance to use for all subsequent runs, or `null` to restore the default. |
 
 ---
 

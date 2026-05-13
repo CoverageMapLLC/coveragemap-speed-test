@@ -96,14 +96,24 @@ const engine = new SpeedTestEngine({
 
 ### Optional: Overrides
 
-| Option | Description |
+**Constructor options (`config`)** — fine-grained timing and behaviour controls:
+
+| Field | Range | Default | Description |
+|---|---|---|---|
+| `config.pingCount` | 5–50 | `10` | Number of latency pings per run |
+| `config.downloadDurationMs` | 3000–30000 | `10000` | Download test duration (ms) |
+| `config.uploadDurationMs` | 3000–30000 | `10000` | Upload test duration (ms) |
+| `config.snapshotIntervalMs` | 50–5000 | `100` | How often progress snapshots are emitted (ms) |
+| `config.latencyTimeoutMs` | 3000–30000 | `10000` | Latency phase timeout (ms) |
+| `config.estimationTimeoutMs` | 3000–30000 | `15000` | Estimation phase timeout (ms) |
+
+**Providers** — set after construction or at the module level:
+
+| Method / Function | Description |
 |---|---|
-| `tests.latency` / `tests.download` / `tests.upload` | Toggle individual test phases |
-| `locationProvider` | Live coordinates provider; falls back to `getConnectionInfo()` when `null` |
-| `networkProvider` | Overrides resolved connection type and cellular/Wi-Fi/wired metadata used in `results` + `stages` |
-| `deviceInfo.deviceIdStorageKey` | Custom storage key for the persistent device ID |
-| `deviceInfo.coreSystem` | Host/runtime/system overrides for backend runners |
-| `setDeviceMetadataProvider()` | Register a custom runtime metadata adapter |
+| `engine.setLocationProvider(provider \| null)` | Live coordinates provider; falls back to IP-based location when `null` |
+| `engine.setNetworkProvider(provider \| null)` | Overrides resolved connection type and cellular/Wi-Fi/wired metadata used in `results` + `stages` |
+| `setDeviceMetadataProvider(provider)` | Register a custom runtime metadata adapter (module-level, replaces the default UA-parser-based implementation) |
 
 ---
 

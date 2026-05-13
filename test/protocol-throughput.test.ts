@@ -72,7 +72,7 @@ describe('throughput protocol runners', () => {
     expect(snapshots.length).toBeGreaterThan(0);
   });
 
-  it('runs upload throughput and tracks sent bytes', async () => {
+  it('runs upload throughput and tracks acknowledged bytes', async () => {
     vi.stubGlobal('WebSocket', ThroughputSocketMock as unknown as typeof WebSocket);
     const result = await runUploadSpeedTest({
       serverUrl: 'wss://speed.example.com/v1/ws',

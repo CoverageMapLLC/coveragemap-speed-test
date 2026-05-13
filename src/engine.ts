@@ -39,7 +39,10 @@ import {
 import {
   buildDeviceResult,
   configureDeviceInfo,
+  setDeviceMetadataProvider,
+  resetDeviceMetadataProvider,
   type DeviceInfoConfigOverrides,
+  type DeviceMetadataProvider,
 } from './utils/device-info.js';
 import { resolveSpeedTestLocation } from './utils/location-provider.js';
 import {
@@ -128,6 +131,14 @@ export class SpeedTestEngine {
     this.networkProvider = provider;
   }
 
+  setDeviceMetadataProvider(provider: DeviceMetadataProvider | null): void {
+    if (provider === null) {
+      resetDeviceMetadataProvider();
+    } else {
+      setDeviceMetadataProvider(provider);
+    }
+  }
+
   async getServers(): Promise<SpeedTestServer[]> {
     return this.speedApi.getServers();
   }
@@ -176,6 +187,7 @@ export class SpeedTestEngine {
     let uploadMessageSizeKb: number | null = null;
     let failedReason: string | null = null;
     let failedStage: string | null = null;
+    let wasCancelled = false;
 
     let connectionInfo: ConnectionInfo | null = null;
     let location: NetworkTestResultLocation | null = null;
@@ -298,6 +310,7 @@ export class SpeedTestEngine {
         }
       } catch (error) {
         if (error instanceof CancellationError) {
+          wasCancelled = true;
           failedReason = 'Cancelled';
           failedStage = this._stage;
         } else {
@@ -340,7 +353,9 @@ export class SpeedTestEngine {
         latencyData?.minLatency ?? 0
       );
 
-      this.uploadResults(testResults);
+      if (!wasCancelled && !this.cancellationToken?.isCancelled) {
+        this.uploadResults(testResults);
+      }
       return testResults;
     } finally {
       this._isRunning = false;
