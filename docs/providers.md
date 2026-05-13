@@ -350,7 +350,7 @@ These values are merged onto the auto-detected `device.coreSystem` block. You do
 ### Restoring the default provider
 
 ```ts
-engine.resetDeviceMetadataProvider();
+engine.setDeviceMetadataProvider(null);
 ```
 
 Discards any custom provider and re-registers the built-in `DefaultDeviceMetadataProvider` for all subsequent `run()` calls.

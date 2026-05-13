@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.1
+
+### Bug Fixes
+
+- **Fix upload results submitted on cancellation** — `SpeedTestEngine` no longer calls `uploadResults` when a test run is cancelled mid-flight. A `wasCancelled` guard was added so partial results are not sent to the backend.
+- **Fix inaccurate upload speed snapshots** — Upload throughput is now measured from server-acknowledged bytes (WebSocket ACK events) rather than raw bytes dispatched to the send buffer. Snapshots use a sliding acknowledgement window (`snapshotIntervalMs × 3`, minimum 300 ms) so real-time readings reflect actual throughput rather than buffered-but-unconfirmed data.
+
+### New Features
+
+- **`testsRun` result field** — `NetworkTestResult` now contains a `testsRun` object (`{ latency: boolean; download: boolean; upload: boolean }`) that records which test phases were enabled for the run.
+- **`ispName` result field** — `NetworkTestResult.results` and per-stage objects now expose `ispName: string | null`, populated from connection info returned by the network provider.
+- **`setDeviceMetadataProvider` on `SpeedTestEngine`** — Callers can now inject a custom `DeviceMetadataProvider` directly on the engine instance, consistent with `setNetworkProvider` and `setLocationProvider`. Pass `null` to restore the built-in `DefaultDeviceMetadataProvider`.
+
+### CI / Internal
+
+- Updated GitHub Actions publish workflow to Node.js 24 and `actions/setup-node@v6`.
+- Added `production` environment to the npm publish job and enabled verbose logging with provenance.
+
 ## 0.2.0
 
 ### New Features

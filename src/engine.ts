@@ -39,7 +39,10 @@ import {
 import {
   buildDeviceResult,
   configureDeviceInfo,
+  setDeviceMetadataProvider,
+  resetDeviceMetadataProvider,
   type DeviceInfoConfigOverrides,
+  type DeviceMetadataProvider,
 } from './utils/device-info.js';
 import { resolveSpeedTestLocation } from './utils/location-provider.js';
 import {
@@ -126,6 +129,14 @@ export class SpeedTestEngine {
 
   setNetworkProvider(provider: SpeedTestNetworkProvider | null): void {
     this.networkProvider = provider;
+  }
+
+  setDeviceMetadataProvider(provider: DeviceMetadataProvider | null): void {
+    if (provider === null) {
+      resetDeviceMetadataProvider();
+    } else {
+      setDeviceMetadataProvider(provider);
+    }
   }
 
   async getServers(): Promise<SpeedTestServer[]> {
