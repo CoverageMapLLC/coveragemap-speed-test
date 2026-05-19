@@ -173,7 +173,7 @@ console.log(result.results.wired);
 
 Each method receives a `context` argument with:
 
-- `connectionType` — what the engine detected from the runtime (`'wifi'`, `'mobile'`, `'ethernet'`, `'bluetooth'`, `'none'`, `'unknown'`)
+- `connectionType` — what the engine detected from the runtime (`'wifi'`, `'mobile'`, `'wired'`, `'bluetooth'`, `'none'`, `'unknown'`)
 - `connectionInfo` — the full IP connection metadata from `/v1/connection`
 
 ### Override semantics

@@ -15,7 +15,7 @@ import type {
 const CONNECTION_TYPES: readonly ConnectionType[] = [
   'wifi',
   'mobile',
-  'ethernet',
+  'wired',
   'bluetooth',
   'none',
   'unknown',
@@ -110,7 +110,7 @@ function buildSnapshotForConnectionType(
         wifi: null,
         wired: null,
       };
-    case 'ethernet':
+    case 'wired':
       return {
         connectionType,
         cellular: null,
@@ -375,7 +375,7 @@ function mapNavigatorConnectionType(raw: string | undefined): ConnectionType {
     case 'wifi':
       return 'wifi';
     case 'ethernet':
-      return 'ethernet';
+      return 'wired';
     case 'cellular':
       return 'mobile';
     case 'bluetooth':

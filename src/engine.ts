@@ -497,6 +497,7 @@ export class SpeedTestEngine {
     };
 
     return {
+      source: 'external',
       version: 1,
       device,
       testType: {

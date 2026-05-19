@@ -553,7 +553,7 @@ interface SpeedTestNetworkProviderContext {
 | Field | Type | Description |
 |-------|------|-------------|
 | `connectionInfo` | `ConnectionInfo \| null` | IP connection metadata from `/v1/connection`. |
-| `connectionType` | `ConnectionType` | Runtime-detected connection type (`'wifi'`, `'mobile'`, `'ethernet'`, etc.). |
+| `connectionType` | `ConnectionType` | Runtime-detected connection type (`'wifi'`, `'mobile'`, `'wired'`, etc.). |
 
 ---
 
@@ -575,7 +575,7 @@ interface SpeedTestNetworkSnapshot {
 | `connectionType` | `ConnectionType` | Final resolved connection type written to the result payload. |
 | `cellular` | `NetworkTestResultCellularInfo \| null` | Cellular signal metadata, present when connection type is mobile. |
 | `wifi` | `NetworkTestResultWiFiInfo \| null` | Wi-Fi metadata, present when connection type is Wi-Fi. |
-| `wired` | `NetworkTestResultWiredInfo \| null` | Wired link metadata, present when connection type is ethernet or unknown. |
+| `wired` | `NetworkTestResultWiredInfo \| null` | Wired link metadata, present when connection type is wired or unknown. |
 
 ---
 
@@ -1109,7 +1109,7 @@ interface NetworkTestResultResults {
 |-------|------|-------------|
 | `dateTime` | `string` | ISO 8601 timestamp when the test completed. |
 | `testStatus` | `TestStatus` | Overall test outcome (`'complete'`, `'failed'`, `'cancelled'`, etc.). |
-| `connectionType` | `ConnectionType \| null` | Detected connection type (e.g. `'wifi'`, `'mobile'`, `'ethernet'`). |
+| `connectionType` | `ConnectionType \| null` | Detected connection type (e.g. `'wifi'`, `'mobile'`, `'wired'`). |
 | `clientIp` | `string \| null` | Client IP address at test time. |
 | `serverIp` | `string \| null` | Speed server IP address. |
 | `isVpn` | `boolean \| null` | VPN detection result when available. |
@@ -1248,7 +1248,7 @@ interface NetworkTestResultWiFiInfo {
 
 ### NetworkTestResultWiredInfo
 
-Present when the detected connection type is not Wi-Fi (ethernet, cellular, or unknown).
+Present when the detected connection type is not Wi-Fi (wired, cellular, or unknown).
 
 ```ts
 interface NetworkTestResultWiredInfo {
@@ -1300,7 +1300,7 @@ type LocationType = 'gps' | 'ip' | 'manual' | 'unknown';
 
 type TestStage = 'latency' | 'download' | 'upload';
 
-type ConnectionType = 'wifi' | 'mobile' | 'ethernet' | 'bluetooth' | 'none' | 'unknown';
+type ConnectionType = 'wifi' | 'mobile' | 'wired' | 'bluetooth' | 'none' | 'unknown';
 
 type RuntimeType = 'browser' | 'node' | 'bun' | 'deno' | 'worker' | 'other';
 

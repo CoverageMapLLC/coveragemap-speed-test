@@ -35,7 +35,7 @@ type TestStage =
   | 'uploadStart'
   | 'uploadEnd';
 
-type ConnectionType = 'wifi' | 'mobile' | 'ethernet' | 'bluetooth' | 'none' | 'unknown';
+type ConnectionType = 'wifi' | 'mobile' | 'wired' | 'bluetooth' | 'none' | 'unknown';
 
 type RuntimeType = 'browser' | 'node' | 'unknown';
 
@@ -280,7 +280,7 @@ interface NetworkTestResultWiredInfo {
 
 - `mobile` → `cellular` is populated, `wifi` and `wired` are `null`
 - `wifi` → `wifi` is populated, `cellular` and `wired` are `null`
-- `ethernet` → `wired` is populated, `cellular` and `wifi` are `null`
+- `wired` connection type → `results.wired` is populated, `cellular` and `wifi` are `null`
 - `bluetooth`, `none`, `unknown` → all three blocks are `null`
 
 A custom `networkProvider` can override this behaviour and set whichever blocks are needed.
