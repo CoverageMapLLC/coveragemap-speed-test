@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+### Bug Fixes & Refinements
+
+- **Rename `ethernet` → `wired` connection type** — The connection type value `"ethernet"` has been renamed to `"wired"` across the codebase, documentation, and tests for consistent terminology. Existing usages of `"ethernet"` should be updated to `"wired"`.
+- **Refactor `DeviceMetadataProvider` interface** — Removed the `reset` method from the `DeviceMetadataProvider` interface. To restore the built-in default provider, pass `null` to `setDeviceMetadataProvider` instead. Updated documentation and examples to reflect this change.
+
 ## 0.2.1
 
 ### Bug Fixes
