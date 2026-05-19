@@ -487,8 +487,6 @@ import type {
 } from '@coveragemap/speed-test';
 
 class ElectronDeviceProvider implements DeviceMetadataProvider {
-  reset(): void {}
-
   getDeviceId(_config: DeviceMetadataProviderConfig): string {
     // Read or generate a stable ID from a config file / keychain
     return 'my-stable-device-id';
@@ -535,7 +533,7 @@ engine.setDeviceMetadataProvider(new ElectronDeviceProvider());
 const result: NetworkTestResultTestResults = await engine.run();
 
 // Revert to the built-in browser provider at any point
-engine.resetDeviceMetadataProvider();
+engine.setDeviceMetadataProvider(null);
 ```
 
 ---

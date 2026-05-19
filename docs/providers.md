@@ -241,8 +241,6 @@ import type {
 } from '@coveragemap/speed-test';
 
 class MyRuntimeProvider implements DeviceMetadataProvider {
-  reset(): void {}
-
   getDeviceId(_config: DeviceMetadataProviderConfig): string {
     // use your own stable identifier — from a keychain, config file, etc.
     return 'my-stable-device-id';
