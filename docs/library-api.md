@@ -37,7 +37,6 @@ import { SpeedTestEngine } from '@coveragemap/speed-test';
     - [DefaultDeviceMetadataProvider](#defaultdevicemetadataprovider)
     - [DeviceInfoConfigOverrides](#deviceinfoconfigoverrides)
     - [CoreSystemOverrides](#coresystemoverrides)
-    - [setDeviceMetadataProvider](#setdevicemetadataprovider)
 - [Data types](#data-types)
   - [SpeedTestServer](#speedtestserver)
   - [ConnectionInfo](#connectioninfo)
@@ -301,11 +300,11 @@ Updates the active network provider at runtime. Pass `null` to use default runti
 setDeviceMetadataProvider(provider: DeviceMetadataProvider | null): void
 ```
 
-Replaces the active device metadata provider with a custom implementation. Takes effect immediately; all subsequent `run()` calls use the new provider. Pass `null` to discard any custom provider and restore the built-in `DefaultDeviceMetadataProvider`. See [`DeviceMetadataProvider`](#devicemetadataprovider) for the interface and [`providers.md`](./providers.md#device-metadata-provider) for a full implementation guide.
+Updates the active device metadata provider at runtime. Pass `null` to restore the built-in `DefaultDeviceMetadataProvider`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `provider` | `DeviceMetadataProvider \| null` | Yes | Custom provider to use for subsequent runs, or `null` to restore the default. |
+| `provider` | `DeviceMetadataProvider \| null` | Yes | Provider instance applied to subsequent `run()` calls for the `device` block in the result payload. |
 
 ---
 
@@ -553,7 +552,7 @@ interface SpeedTestNetworkProviderContext {
 | Field | Type | Description |
 |-------|------|-------------|
 | `connectionInfo` | `ConnectionInfo \| null` | IP connection metadata from `/v1/connection`. |
-| `connectionType` | `ConnectionType` | Runtime-detected connection type (`'wifi'`, `'mobile'`, `'ethernet'`, etc.). |
+| `connectionType` | `ConnectionType` | Runtime-detected connection type (`'wifi'`, `'mobile'`, `'wired'`, etc.). |
 
 ---
 
@@ -575,7 +574,7 @@ interface SpeedTestNetworkSnapshot {
 | `connectionType` | `ConnectionType` | Final resolved connection type written to the result payload. |
 | `cellular` | `NetworkTestResultCellularInfo \| null` | Cellular signal metadata, present when connection type is mobile. |
 | `wifi` | `NetworkTestResultWiFiInfo \| null` | Wi-Fi metadata, present when connection type is Wi-Fi. |
-| `wired` | `NetworkTestResultWiredInfo \| null` | Wired link metadata, present when connection type is ethernet or unknown. |
+| `wired` | `NetworkTestResultWiredInfo \| null` | Wired link metadata, present when connection type is wired or unknown. |
 
 ---
 
@@ -589,7 +588,6 @@ Interface for custom device metadata implementations. Replace the built-in provi
 
 ```ts
 interface DeviceMetadataProvider {
-  reset(): void;
   getDeviceId(config: DeviceMetadataProviderConfig): string;
   parseBrowserInfo(): ParsedBrowserInfo;
   parseOSInfo(): ParsedOSInfo;
@@ -600,7 +598,6 @@ interface DeviceMetadataProvider {
 
 | Method | Return type | Description |
 |--------|-------------|-------------|
-| `reset()` | `void` | Clears any cached state in the provider. Called at the start of each run. |
 | `getDeviceId(config)` | `string` | Returns a persistent device identifier. |
 | `parseBrowserInfo()` | `ParsedBrowserInfo` | Parses browser name, version, and engine. |
 | `parseOSInfo()` | `ParsedOSInfo` | Parses OS name and version. |
@@ -682,37 +679,6 @@ interface CoreSystemOverrides {
 | `runtimeVersion` | `string \| null` | Runtime version string (e.g. Node.js version). |
 | `uptimeSeconds` | `number \| null` | Process uptime in seconds. |
 | `memoryRssMb` | `number \| null` | Resident set size memory in MB. |
-
----
-
-#### setDeviceMetadataProvider
-
-```ts
-setDeviceMetadataProvider(provider: DeviceMetadataProvider | null): void
-```
-
-Replaces the active device metadata provider with a custom implementation. Must be called before `run()` to take effect. Pass `null` to restore the built-in `DefaultDeviceMetadataProvider`.
-
-```ts
-import { SpeedTestEngine } from '@coveragemap/speed-test';
-import type { DeviceMetadataProvider } from '@coveragemap/speed-test';
-
-class MyProvider implements DeviceMetadataProvider {
-  // implement all required methods ...
-}
-
-const engine = new SpeedTestEngine({ application: { ... } });
-engine.setDeviceMetadataProvider(new MyProvider());
-
-await engine.run();
-
-// restore the default provider
-engine.setDeviceMetadataProvider(null);
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `provider` | `DeviceMetadataProvider \| null` | Custom provider instance to use for all subsequent runs, or `null` to restore the default. |
 
 ---
 
@@ -1109,7 +1075,7 @@ interface NetworkTestResultResults {
 |-------|------|-------------|
 | `dateTime` | `string` | ISO 8601 timestamp when the test completed. |
 | `testStatus` | `TestStatus` | Overall test outcome (`'complete'`, `'failed'`, `'cancelled'`, etc.). |
-| `connectionType` | `ConnectionType \| null` | Detected connection type (e.g. `'wifi'`, `'mobile'`, `'ethernet'`). |
+| `connectionType` | `ConnectionType \| null` | Detected connection type (e.g. `'wifi'`, `'mobile'`, `'wired'`). |
 | `clientIp` | `string \| null` | Client IP address at test time. |
 | `serverIp` | `string \| null` | Speed server IP address. |
 | `isVpn` | `boolean \| null` | VPN detection result when available. |
@@ -1248,7 +1214,7 @@ interface NetworkTestResultWiFiInfo {
 
 ### NetworkTestResultWiredInfo
 
-Present when the detected connection type is not Wi-Fi (ethernet, cellular, or unknown).
+Present when the detected connection type is not Wi-Fi (wired, cellular, or unknown).
 
 ```ts
 interface NetworkTestResultWiredInfo {
@@ -1300,7 +1266,7 @@ type LocationType = 'gps' | 'ip' | 'manual' | 'unknown';
 
 type TestStage = 'latency' | 'download' | 'upload';
 
-type ConnectionType = 'wifi' | 'mobile' | 'ethernet' | 'bluetooth' | 'none' | 'unknown';
+type ConnectionType = 'wifi' | 'mobile' | 'wired' | 'bluetooth' | 'none' | 'unknown';
 
 type RuntimeType = 'browser' | 'node' | 'bun' | 'deno' | 'worker' | 'other';
 

@@ -66,9 +66,9 @@ describe('defaultSpeedTestNetworkProvider', () => {
     expect(network.wired).toBeNull();
   });
 
-  it('builds wired defaults for ethernet connection type', () => {
-    const network = defaultSpeedTestNetworkProvider(context({ connectionType: 'ethernet' }));
-    expect(network.connectionType).toBe('ethernet');
+  it('builds wired defaults for wired connection type', () => {
+    const network = defaultSpeedTestNetworkProvider(context({ connectionType: 'wired' }));
+    expect(network.connectionType).toBe('wired');
     expect(network.wired).toEqual({
       ispName: 'CoverageMap ISP',
       macAddress: null,
@@ -112,12 +112,12 @@ describe('getNetworkInfo', () => {
     expect(getNetworkInfo()).toBe('wifi');
   });
 
-  it('maps ethernet type', () => {
+  it('maps navigator ethernet type to wired', () => {
     Object.defineProperty(navigator, 'connection', {
       configurable: true,
       value: { type: 'ethernet' },
     });
-    expect(getNetworkInfo()).toBe('ethernet');
+    expect(getNetworkInfo()).toBe('wired');
   });
 });
 

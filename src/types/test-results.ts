@@ -17,11 +17,12 @@ export type TestStage =
   | 'uploadStart'
   | 'uploadEnd';
 
-export type ConnectionType = 'wifi' | 'mobile' | 'ethernet' | 'bluetooth' | 'none' | 'unknown';
+export type ConnectionType = 'wifi' | 'mobile' | 'wired' | 'bluetooth' | 'none' | 'unknown';
 export type RuntimeType = 'browser' | 'node' | 'unknown';
 export type ApplicationType = 'web' | 'backend' | 'mobile' | 'desktop' | 'cli' | 'serverless' | 'other';
 
 export interface NetworkTestResultTestResults {
+  source: 'external';
   version: number;
   device: NetworkTestResultDevice;
   testType: NetworkTestResultTestType;

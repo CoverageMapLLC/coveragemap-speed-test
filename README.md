@@ -113,7 +113,7 @@ const engine = new SpeedTestEngine({
 |---|---|
 | `engine.setLocationProvider(provider \| null)` | Live coordinates provider; falls back to IP-based location when `null` |
 | `engine.setNetworkProvider(provider \| null)` | Overrides resolved connection type and cellular/Wi-Fi/wired metadata used in `results` + `stages` |
-| `setDeviceMetadataProvider(provider)` | Register a custom runtime metadata adapter (module-level, replaces the default UA-parser-based implementation) |
+| `engine.setDeviceMetadataProvider(provider \| null)` | Overrides device identity and host telemetry in the `device` result block; restores `DefaultDeviceMetadataProvider` when `null` |
 
 ---
 
