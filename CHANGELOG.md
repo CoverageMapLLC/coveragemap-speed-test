@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+### New Features
+
+- **`getDevice()` on `SpeedTestEngine`** — New synchronous method that returns the current device metadata (`NetworkTestResultDevice`) using the same resolution logic as a full test run. Useful for previewing device context independently of running a speed test.
+- **`getLocation()` on `SpeedTestEngine`** — New async method that resolves and returns the current location metadata (`NetworkTestResultLocation | null`) independently of running a speed test.
+- **`getNetwork()` on `SpeedTestEngine`** — New async method that resolves and returns the current network metadata (`ResolvedSpeedTestNetwork`) independently of running a speed test.
+- **Device formatting utilities** — Introduced `device-format.ts` with helpers for producing consistent, human-readable labels: `formatDeviceOS`, `formatDeviceType`, `formatBrowserName`, `formatBrowserDisplay`, `formatOSDisplay`, `formatDisplayName`. All helpers are now exported from the package's utils entry point.
+
+### Improvements
+
+- **Normalized device metadata output** — All device metadata fields (OS name, browser name, browser engine, device type, device vendor, platform) are now run through the new formatting helpers, producing consistent Title Case labels (e.g., `"mobile"` → `"Mobile"`, `"darwin"` → `"macOS"`, `"win32"` → `"Windows"`). The leading `v` is stripped from version strings for cleaner display.
+
+### Documentation
+
+- Expanded `docs/library-api.md` with descriptions and usage examples for `getDevice()`, `getLocation()`, `getNetwork()`, and the new formatting utilities.
+- Updated `docs/providers.md` to note that provider setters affect the new preview methods as well as full test runs.
+
 ## 0.2.2
 
 ### Bug Fixes & Refinements
