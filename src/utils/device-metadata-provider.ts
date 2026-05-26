@@ -8,6 +8,14 @@ import type {
   RuntimeType,
 } from '../types/test-results.js';
 import { generateUUID } from './uuid.js';
+import {
+  formatBrowserDisplay,
+  formatBrowserName,
+  formatDeviceOS,
+  formatDeviceType,
+  formatDisplayName,
+  formatVersion,
+} from './device-format.js';
 
 interface NavigatorConnection {
   type?: string;
@@ -99,9 +107,9 @@ export class DefaultDeviceMetadataProvider implements DeviceMetadataProvider {
     const browser = parser.getBrowser();
     const engine = parser.getEngine();
     return {
-      browserName: browser.name ?? 'Unknown',
-      browserVersion: browser.version ?? 'unknown',
-      browserEngine: engine.name ?? 'Unknown',
+      browserName: formatBrowserName(browser.name ?? 'Unknown'),
+      browserVersion: formatVersion(browser.version) || 'unknown',
+      browserEngine: formatDisplayName(engine.name ?? 'Unknown'),
     };
   }
 
@@ -110,8 +118,8 @@ export class DefaultDeviceMetadataProvider implements DeviceMetadataProvider {
     if (!parser) {
       if (typeof process !== 'undefined' && !!process.versions?.node) {
         return {
-          osName: process.platform,
-          osVersion: process.version,
+          osName: formatDeviceOS(process.platform),
+          osVersion: formatVersion(process.version),
         };
       }
 
@@ -123,8 +131,8 @@ export class DefaultDeviceMetadataProvider implements DeviceMetadataProvider {
 
     const os = parser.getOS();
     return {
-      osName: os.name ?? 'Unknown',
-      osVersion: os.version ?? '',
+      osName: formatDisplayName(os.name ?? 'Unknown'),
+      osVersion: formatVersion(os.version),
     };
   }
 
@@ -138,7 +146,7 @@ export class DefaultDeviceMetadataProvider implements DeviceMetadataProvider {
       browserName,
       browserVersion,
       browserEngine,
-      platform: parser?.getOS().name ?? nav?.platform ?? 'Unknown',
+      platform: formatDisplayName(parser?.getOS().name ?? nav?.platform ?? 'Unknown'),
       language: nav?.language ?? 'unknown',
       languages: nav?.languages ? [...nav.languages] : [],
       hardwareConcurrency: nav?.hardwareConcurrency ?? 0,
@@ -162,21 +170,37 @@ export class DefaultDeviceMetadataProvider implements DeviceMetadataProvider {
     const isMobile = device?.type === 'mobile' || device?.type === 'tablet';
     const coreSystem = this.buildCoreSystemInfo(runtime, config.coreSystem);
 
-    const browserName = browser?.name ?? (runtime === 'node' ? 'Node.js' : null);
-    const browserVersion = browser?.version ?? (runtime === 'node' ? process.version : null);
-    const browserEngine = engine?.name ?? (runtime === 'node' ? 'V8' : null);
-    const browserEngineVersion = engine?.version ?? null;
+    const browserName = formatBrowserName(
+      browser?.name ?? (runtime === 'node' ? 'Node.js' : null)
+    );
+    const browserVersion =
+      formatVersion(browser?.version) ||
+      (runtime === 'node' ? formatVersion(process.version) : null) ||
+      null;
+    const browserEngineRaw = engine?.name ?? (runtime === 'node' ? 'V8' : null);
+    const browserEngine = browserEngineRaw ? formatDisplayName(browserEngineRaw) : null;
+    const browserEngineVersion = formatVersion(engine?.version) || null;
     const osName = os?.name ?? (runtime === 'node' ? process.platform : 'Unknown');
-    const osVersion = os?.version ?? (runtime === 'node' ? process.version : '');
+    const osVersion =
+      formatVersion(os?.version) ||
+      (runtime === 'node' ? formatVersion(process.version) : '');
+
+    const rawDeviceType = isMobile
+      ? (device?.type ?? 'mobile')
+      : runtime === 'node'
+        ? 'server'
+        : 'desktop';
 
     return {
       id: this.getDeviceId(config),
-      manufacturer: engine?.name ?? (runtime === 'node' ? 'Node.js' : 'Unknown'),
+      manufacturer: formatDisplayName(
+        engine?.name ?? (runtime === 'node' ? 'Node.js' : 'Unknown')
+      ),
       nameId: nav?.userAgent ?? coreSystem?.hostName ?? null,
       name:
         runtime === 'node'
-          ? `Node ${process.version}`
-          : `${browser?.name ?? 'Unknown'} ${browser?.version ?? 'unknown'}`,
+          ? formatBrowserDisplay('Node.js', formatVersion(process.version))
+          : formatBrowserDisplay(browser?.name, browser?.version),
       os: this.mapDeviceOS(osName),
       osVersion,
       appName: config.application.name,
@@ -191,8 +215,8 @@ export class DefaultDeviceMetadataProvider implements DeviceMetadataProvider {
       cpuArchitecture: cpu?.architecture ?? coreSystem?.architecture ?? null,
       cpuCores: nav?.hardwareConcurrency ?? null,
       deviceMemoryGb: nav?.deviceMemory ?? null,
-      deviceType: isMobile ? (device?.type ?? 'mobile') : runtime === 'node' ? 'server' : 'desktop',
-      deviceVendor: device?.vendor ?? null,
+      deviceType: formatDeviceType(rawDeviceType),
+      deviceVendor: device?.vendor ? formatDisplayName(device.vendor) : null,
       deviceModel: device?.model ?? null,
       isMobile,
 

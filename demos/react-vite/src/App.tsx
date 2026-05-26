@@ -1,7 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   SpeedTestEngine,
+  formatBrowserDisplay,
+  formatOSDisplay,
   type LatencyTestData,
+  type NetworkTestResultDevice,
+  type NetworkTestResultLocation,
   type SpeedSnapshot,
   type SpeedTestData,
   type NetworkTestResultTestResults,
@@ -11,7 +15,7 @@ import {
 
 const engine = new SpeedTestEngine({
   application: {
-    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    id: '11111111-1111-1111-1111-111111111111',
     name: 'CoverageMap React Example',
     version: '0.1.0',
     organization: 'CoverageMap',
@@ -23,6 +27,15 @@ function formatMbps(value: number | null | undefined): string {
   if (value == null) return '-';
   if (value < 10) return value.toFixed(1);
   return Math.round(value).toString();
+}
+
+function formatCoordinate(value: number | null | undefined): string {
+  if (value == null) return '-';
+  return value.toFixed(5);
+}
+
+function formatLocationType(locationType: NetworkTestResultLocation['locationType']): string {
+  return locationType === 'device' ? 'Device GPS' : 'IP geolocation';
 }
 
 type LiveMeasurements = {
@@ -46,7 +59,27 @@ export default function App() {
   const [selectedServerId, setSelectedServerId] = useState('');
   const [result, setResult] = useState<NetworkTestResultTestResults | null>(null);
   const [liveMeasurements, setLiveMeasurements] = useState<LiveMeasurements>(EMPTY_MEASUREMENTS);
+  const [device, setDevice] = useState<NetworkTestResultDevice | null>(null);
+  const [location, setLocation] = useState<NetworkTestResultLocation | null>(null);
+  const [isLoadingContext, setIsLoadingContext] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const loadContext = async () => {
+    setDevice(engine.getDevice());
+    setIsLoadingContext(true);
+    try {
+      const resolvedLocation = await engine.getLocation();
+      setLocation(resolvedLocation);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsLoadingContext(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadContext();
+  }, []);
 
   const selectedServer = useMemo(() => {
     if (!selectedServerId) return null;
@@ -188,6 +221,76 @@ export default function App() {
           <div>
             <span>Jitter</span>
             <strong>{formatMbps(liveMeasurements.jitter)} ms</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="card context">
+        <div className="metrics-header">
+          <h2>Device &amp; Location</h2>
+          <button type="button" onClick={() => void loadContext()} disabled={isRunning || isLoadingContext}>
+            {isLoadingContext ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+        <div className="context-grid">
+          <div className="context-panel">
+            <h3>Device</h3>
+            {device ? (
+              <dl className="detail-list">
+                <div>
+                  <dt>Name</dt>
+                  <dd>{device.name}</dd>
+                </div>
+                <div>
+                  <dt>OS</dt>
+                  <dd>{formatOSDisplay(device.os, device.osVersion)}</dd>
+                </div>
+                <div>
+                  <dt>Browser</dt>
+                  <dd>{formatBrowserDisplay(device.browserName, device.browserVersion)}</dd>
+                </div>
+                <div>
+                  <dt>Type</dt>
+                  <dd>{device.isMobile ? 'Mobile' : device.deviceType ?? 'Unknown'}</dd>
+                </div>
+                <div>
+                  <dt>Device ID</dt>
+                  <dd className="mono">{device.id ?? '-'}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="muted">Loading device metadata...</p>
+            )}
+          </div>
+
+          <div className="context-panel">
+            <h3>Location</h3>
+            {isLoadingContext ? (
+              <p className="muted">Resolving location...</p>
+            ) : location ? (
+              <dl className="detail-list">
+                <div>
+                  <dt>Latitude</dt>
+                  <dd>{formatCoordinate(location.latitude)}</dd>
+                </div>
+                <div>
+                  <dt>Longitude</dt>
+                  <dd>{formatCoordinate(location.longitude)}</dd>
+                </div>
+                <div>
+                  <dt>Source</dt>
+                  <dd>{formatLocationType(location.locationType)}</dd>
+                </div>
+                {location.elevation != null && (
+                  <div>
+                    <dt>Elevation</dt>
+                    <dd>{formatCoordinate(location.elevation)} m</dd>
+                  </div>
+                )}
+              </dl>
+            ) : (
+              <p className="muted">No location available.</p>
+            )}
           </div>
         </div>
       </section>

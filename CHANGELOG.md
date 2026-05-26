@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0
+
+### New Features
+
+- **`getDevice()` on `SpeedTestEngine`** — Returns a `NetworkTestResultDevice` snapshot of the current device metadata without running a full test. Useful for previewing what device context will be attached to test results.
+- **`getLocation()` on `SpeedTestEngine`** — Async method that resolves and returns the current `NetworkTestResultLocation` (or `null`) independently of a test run, using the configured location provider.
+- **`getNetwork()` on `SpeedTestEngine`** — Async method that resolves and returns the current `ResolvedSpeedTestNetwork` independently of a test run, using the configured network provider.
+- **Device formatting utilities** — New `src/utils/device-format.ts` module with exported helpers: `formatDeviceOS`, `formatDeviceType`, `formatBrowserName`, `formatBrowserDisplay`, `formatOSDisplay`, and `formatDisplayName`. These are now part of the public API via `src/utils/index.ts`.
+
+### Improvements
+
+- **Normalized device display names** — `DefaultDeviceMetadataProvider` now uses the new formatting helpers to produce consistent, human-readable values for OS name, browser name, browser engine, device type, and device vendor across all runtimes (browser and Node.js).
+
+### Bug Fixes
+
+- **Fix inaccurate upload speed snapshots** — Replaced the sliding acknowledgement-window calculation with a simpler total-acknowledged-bytes-over-elapsed-duration approach, removing the moving window state (`ackEvents`, `ackBytesInWindow`, `MIN_SNAPSHOT_WINDOW_MS`). This produces more stable and accurate real-time upload speed readings.
+
+### Demo & Developer Experience
+
+- Enhanced the React Vite demo with a new "Device & Location" panel that displays resolved device and location metadata using the new `getDevice()` and `getLocation()` methods.
+- Added Vite and TypeScript path aliases in the demo to resolve `@coveragemap/speed-test` directly from the local source, eliminating the need to publish before testing locally.
+
 ## 0.2.2
 
 ### Bug Fixes & Refinements
