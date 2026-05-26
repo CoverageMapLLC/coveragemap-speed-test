@@ -72,6 +72,10 @@ import { SpeedTestEngine } from '@coveragemap/speed-test';
   - [formatSpeed](#formatspeed)
   - [formatBytes](#formatbytes)
   - [formatLatency](#formatlatency)
+  - [formatDeviceOS](#formatdeviceos)
+  - [formatDeviceType](#formatdevicetype)
+  - [formatBrowserDisplay](#formatbrowserdisplay)
+  - [formatOSDisplay](#formatosdisplay)
   - [generateUUID](#generateuuid)
 
 ---
@@ -252,6 +256,38 @@ Fetches client and server connection metadata from `/v1/connection`. Returns `nu
 
 ---
 
+#### `getDevice()`
+
+```ts
+getDevice(): NetworkTestResultDevice
+```
+
+Builds the `device` block that would be included in a result payload, using the active [`DeviceMetadataProvider`](#devicemetadataprovider). Does not run a speed test or make network requests. Useful for previewing device identity before a run or for UI that displays device context independently of testing.
+
+---
+
+#### `getLocation()`
+
+```ts
+getLocation(): Promise<NetworkTestResultLocation | null>
+```
+
+Resolves location using the same logic as `run()`: the active [`SpeedTestLocationProvider`](#speedtestlocationprovider) first, then IP geolocation from [`getConnectionInfo()`](#getconnectioninfo). Fetches connection info internally. Returns `null` when no coordinates are available from either source.
+
+The returned `locationType` is `'device'` when coordinates come from the provider and `'ip'` when they come from connection info.
+
+---
+
+#### `getNetwork()`
+
+```ts
+getNetwork(): Promise<ResolvedSpeedTestNetwork>
+```
+
+Resolves network metadata using the same logic as `run()`: the active [`SpeedTestNetworkProvider`](#speedtestnetworkprovider) merged with runtime connection-type detection and connection-info defaults. Fetches connection info internally. Returns `connectionType`, `cellular`, `wifi`, `wired`, and a `source` field indicating whether the snapshot came from `'provider'` or `'deviceMetadata'`.
+
+---
+
 #### `updateCallbacks(callbacks)`
 
 ```ts
@@ -276,7 +312,7 @@ Updates the active location provider at runtime. Pass `null` to disable custom c
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `provider` | `SpeedTestLocationProvider \| null` | Yes | Provider callback used for subsequent `getServers()`, `refreshServers()`, and `run()` calls. |
+| `provider` | `SpeedTestLocationProvider \| null` | Yes | Provider callback used for subsequent `getServers()`, `refreshServers()`, `getLocation()`, and `run()` calls. |
 
 ---
 
@@ -290,7 +326,7 @@ Updates the active network provider at runtime. Pass `null` to use default runti
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `provider` | `SpeedTestNetworkProvider \| null` | Yes | Provider object applied to subsequent `run()` calls for `connectionType`, `cellular`, `wifi`, and `wired` payload fields. |
+| `provider` | `SpeedTestNetworkProvider \| null` | Yes | Provider object applied to subsequent `getNetwork()` and `run()` calls for `connectionType`, `cellular`, `wifi`, and `wired` payload fields. |
 
 ---
 
@@ -304,7 +340,7 @@ Updates the active device metadata provider at runtime. Pass `null` to restore t
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `provider` | `DeviceMetadataProvider \| null` | Yes | Provider instance applied to subsequent `run()` calls for the `device` block in the result payload. |
+| `provider` | `DeviceMetadataProvider \| null` | Yes | Provider instance applied to subsequent `getDevice()` and `run()` calls for the `device` block in the result payload. |
 
 ---
 
@@ -1440,6 +1476,48 @@ formatLatency(ms: number): string
 ```
 
 Returns a human-readable latency string (e.g. `"14 ms"`).
+
+---
+
+### formatDeviceOS
+
+```ts
+formatDeviceOS(os: DeviceOS | string | null | undefined): string
+```
+
+Returns a display label for a canonical `DeviceOS` slug (e.g. `'windows'` → `"Windows"`, `'mac'` → `"macOS"`).
+
+---
+
+### formatDeviceType
+
+```ts
+formatDeviceType(deviceType: string | null | undefined): string
+```
+
+Returns a display label for a device type value (e.g. `'desktop'` → `"Desktop"`, `'mobile'` → `"Mobile"`).
+
+---
+
+### formatBrowserDisplay
+
+```ts
+formatBrowserDisplay(name: string | null | undefined, version?: string | null): string
+```
+
+Returns a formatted browser label (e.g. `"Chrome 148.0.0.0"`).
+
+---
+
+### formatOSDisplay
+
+```ts
+formatOSDisplay(os: DeviceOS | string | null | undefined, osVersion?: string | null): string
+```
+
+Returns a formatted operating system label (e.g. `"Windows 10"`, `"macOS 14.2.1"`). Use this when presenting `device.os` (slug) together with `device.osVersion`.
+
+The default device metadata provider also applies these formatting rules when building human-readable fields such as `name`, `browserName`, and `deviceType`. The canonical `device.os` slug is unchanged for API compatibility.
 
 ---
 
