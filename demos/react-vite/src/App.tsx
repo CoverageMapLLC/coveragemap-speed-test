@@ -11,7 +11,7 @@ import {
 
 const engine = new SpeedTestEngine({
   application: {
-    id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    id: '11111111-1111-1111-1111-111111111111',
     name: 'CoverageMap React Example',
     version: '0.1.0',
     organization: 'CoverageMap',

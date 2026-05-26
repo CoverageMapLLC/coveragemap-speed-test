@@ -15,7 +15,6 @@ export interface UploadSpeedTestOptions {
 }
 
 const MAX_CHUNK_SIZE = 1024 * 1024;
-const MIN_SNAPSHOT_WINDOW_MS = 300;
 
 export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promise<SpeedTestData> {
   const {
@@ -43,8 +42,6 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
     const bufferSizeKb = Math.max(messageSizeKb * 8, 1024);
     const messageBytes = messageSizeKb * 1024;
     const pendingBytesBySocket = new Map<WebSocket, number[]>();
-    const ackEvents: Array<{ timeMs: number; bytes: number }> = [];
-    let ackBytesInWindow = 0;
 
     const cleanup = () => {
       if (snapshotTimer) clearInterval(snapshotTimer);
@@ -124,18 +121,9 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
 
       snapshotTimer = setInterval(() => {
         if (!testStartTime || settled) return;
-        const now = performance.now();
-        const elapsed = now - testStartTime;
-        const snapshotWindowMs = Math.max(snapshotIntervalMs * 3, MIN_SNAPSHOT_WINDOW_MS);
-        const cutoffTime = now - snapshotWindowMs;
-        while (ackEvents.length > 0 && ackEvents[0].timeMs < cutoffTime) {
-          const expired = ackEvents.shift();
-          if (expired) ackBytesInWindow -= expired.bytes;
-        }
-
-        const effectiveWindowMs = Math.max(Math.min(elapsed, snapshotWindowMs), 1);
-        const speedMbps = calculateSpeedMbps(Math.max(ackBytesInWindow, 0), effectiveWindowMs);
-
+        const elapsed = performance.now() - testStartTime;
+        const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
+        const speedMbps = calculateSpeedMbps(acknowledgedBytes, effectiveDurationMs);
         const snapshot: SpeedSnapshot = {
           timeOffsetMs: elapsed,
           speedMbps,
@@ -172,9 +160,6 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
           const acknowledgedChunkSize = pendingBytes?.shift();
           if (acknowledgedChunkSize === undefined) return;
           acknowledgedBytes += acknowledgedChunkSize;
-          const ackTime = performance.now();
-          ackEvents.push({ timeMs: ackTime, bytes: acknowledgedChunkSize });
-          ackBytesInWindow += acknowledgedChunkSize;
         };
 
         socket.onerror = () => {
