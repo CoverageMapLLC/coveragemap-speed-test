@@ -2,6 +2,14 @@ export { CancellationToken, CancellationError } from './cancellation.js';
 export { generateUUID } from './uuid.js';
 export { calculateSpeedMbps, formatSpeed, formatBytes, formatLatency } from './speed.js';
 export {
+  formatBrowserDisplay,
+  formatBrowserName,
+  formatDeviceOS,
+  formatDeviceType,
+  formatDisplayName,
+  formatOSDisplay,
+} from './device-format.js';
+export {
   configureDeviceInfo,
   resetDeviceInfoConfiguration,
   setDeviceMetadataProvider,

@@ -116,6 +116,11 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  margin-bottom: 12px;
+}
+
+.metrics-header h2 {
+  margin: 0;
 }
 
 .live-pill {
@@ -138,4 +143,58 @@ button:disabled {
 .metrics span {
   font-size: 12px;
   opacity: 0.7;
+}
+
+.context-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.context-panel {
+  border: 1px solid #8884;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.context-panel h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.detail-list {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.detail-list > div {
+  display: grid;
+  gap: 2px;
+}
+
+.detail-list dt {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.detail-list dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.detail-list .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.muted {
+  margin: 0;
+  opacity: 0.75;
 }

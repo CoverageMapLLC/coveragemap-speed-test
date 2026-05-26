@@ -3,6 +3,7 @@ import type { ConnectionInfo } from './types/connection-info.js';
 import type {
   ApplicationType,
   NetworkTestResultApplicationInfo,
+  NetworkTestResultDevice,
   NetworkTestResultTestResults,
   NetworkTestResultResults,
   NetworkTestResultLocation,
@@ -153,6 +154,20 @@ export class SpeedTestEngine {
 
   async getConnectionInfo(): Promise<ConnectionInfo | null> {
     return this.speedApi.getConnectionInfo();
+  }
+
+  getDevice(): NetworkTestResultDevice {
+    return buildDeviceResult();
+  }
+
+  async getLocation(): Promise<NetworkTestResultLocation | null> {
+    const connectionInfo = await this.getConnectionInfo();
+    return this.acquireLocation(connectionInfo);
+  }
+
+  async getNetwork(): Promise<ResolvedSpeedTestNetwork> {
+    const connectionInfo = await this.getConnectionInfo();
+    return this.acquireNetwork(connectionInfo);
   }
 
   cancel(): void {

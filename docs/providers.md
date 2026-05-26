@@ -6,9 +6,36 @@ The engine exposes three provider hooks that let you supply context it cannot de
 
 ## Table of contents
 
+- [Previewing provider data](#previewing-provider-data)
 - [Location provider](#location-provider)
 - [Network provider](#network-provider)
 - [Device metadata provider](#device-metadata-provider)
+
+---
+
+## Previewing provider data
+
+You do not need to run a speed test to inspect what the engine would resolve from your providers. After registering providers, call these methods on the engine:
+
+| Method | Returns | Network request |
+|--------|---------|-----------------|
+| `getDevice()` | `NetworkTestResultDevice` | No |
+| `getLocation()` | `NetworkTestResultLocation \| null` | Yes — fetches connection info for IP fallback |
+| `getNetwork()` | `ResolvedSpeedTestNetwork` | Yes — fetches connection info for ISP defaults |
+
+Each method uses the same resolution path as `run()`, so previews match what would appear in the result payload.
+
+```ts
+engine.setLocationProvider(async () => ({ latitude: 37.7749, longitude: -122.4194 }));
+engine.setNetworkProvider({
+  getWifiMetadata: () => ({ ssidName: 'Office-5G', rssi: -62 }),
+});
+engine.setDeviceMetadataProvider(new MyRuntimeProvider());
+
+const device = engine.getDevice();
+const location = await engine.getLocation();
+const network = await engine.getNetwork();
+```
 
 ---
 

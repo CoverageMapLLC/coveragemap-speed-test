@@ -34,7 +34,7 @@ describe('device info runtime support', () => {
 
     expect(result.appName).toBe('Backend Speed Runner');
     expect(result.browserName).toBe('Node.js');
-    expect(result.deviceType).toBe('server');
+    expect(result.deviceType).toBe('Server');
     expect(result.coreSystem?.runtime).toBe('node');
     expect(result.coreSystem?.hostName).toBe('backend-node-1');
   });
