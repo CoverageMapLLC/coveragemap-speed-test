@@ -12,6 +12,11 @@ import {
   type SpeedTestServer,
   type SpeedTestStage,
 } from '@coveragemap/speed-test';
+import {
+  EMPTY_MEASUREMENTS,
+  mergeCompletedMeasurements,
+  type LiveMeasurements,
+} from './live-measurements';
 
 const engine = new SpeedTestEngine({
   application: {
@@ -37,20 +42,6 @@ function formatCoordinate(value: number | null | undefined): string {
 function formatLocationType(locationType: NetworkTestResultLocation['locationType']): string {
   return locationType === 'device' ? 'Device GPS' : 'IP geolocation';
 }
-
-type LiveMeasurements = {
-  downloadSpeed: number | null;
-  uploadSpeed: number | null;
-  latency: number | null;
-  jitter: number | null;
-};
-
-const EMPTY_MEASUREMENTS: LiveMeasurements = {
-  downloadSpeed: null,
-  uploadSpeed: null,
-  latency: null,
-  jitter: null,
-};
 
 export default function App() {
   const [stage, setStage] = useState<SpeedTestStage>('idle');
@@ -136,12 +127,7 @@ export default function App() {
     try {
       const completed = selectedServer ? await engine.run(selectedServer) : await engine.run();
       setResult(completed);
-      setLiveMeasurements({
-        downloadSpeed: completed.results.measurements.downloadSpeed,
-        uploadSpeed: completed.results.measurements.uploadSpeed,
-        latency: completed.results.measurements.latency,
-        jitter: completed.results.measurements.jitter,
-      });
+      setLiveMeasurements((previous) => mergeCompletedMeasurements(previous, completed));
       setStage('complete');
     } catch (err) {
       setStage('error');
