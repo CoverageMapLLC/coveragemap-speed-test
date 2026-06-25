@@ -149,6 +149,66 @@ describe('engine regression', () => {
     expect(mocks.uploadResultsMock).toHaveBeenCalledTimes(1);
   });
 
+  it('uses the latency-stage result as the source of truth for final latency and jitter', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const latencyResult = {
+      latencies: [45, 12, 60],
+      minLatency: 12,
+      averageLatency: 39,
+      medianLatency: 45,
+      maxLatency: 60,
+      minJitter: 15,
+      averageJitter: 24,
+      medianJitter: 33,
+      maxJitter: 33,
+    };
+    mocks.latencyMock.mockResolvedValueOnce(latencyResult);
+
+    const onLatencyResult = vi.fn();
+    const onComplete = vi.fn();
+    const engine = new SpeedTestEngine({
+      application: applicationMetadata,
+      callbacks: {
+        onLatencyResult,
+        onComplete,
+      },
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(mocks.latencyMock).toHaveBeenCalledTimes(1);
+    expect(onLatencyResult).toHaveBeenCalledWith(latencyResult);
+    expect(mocks.downloadEstimationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ latencyMs: 12, jitterMs: 15 })
+    );
+    expect(mocks.downloadSpeedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ latencyMs: 12, jitterMs: 15 })
+    );
+    expect(mocks.uploadEstimationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ latencyMs: 12, jitterMs: 15 })
+    );
+    expect(mocks.uploadSpeedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ latencyMs: 12, jitterMs: 15 })
+    );
+    expect(result.results.measurements.latency).toBe(12);
+    expect(result.results.measurements.jitter).toBe(15);
+    expect(result.results.measurements.latenciesList).toEqual([45, 12, 60]);
+    expect(onComplete).toHaveBeenCalledWith(120, 60, 12);
+  });
+
   it('selects the first available server when none is provided', async () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
     mocks.getServerListMock.mockResolvedValueOnce([
