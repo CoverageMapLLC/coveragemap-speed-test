@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.1
+
+### Bug Fixes
+
+- **Prevent stale latency and jitter in live UI updates** — When a test completes, latency and jitter values from the latency test stage are now preserved rather than being overwritten by the final result snapshot. This eliminates a race condition where a later, less accurate value could replace the already-settled measurement visible in the UI.
+
+### Demo & Developer Experience
+
+- Extracted the `LiveMeasurements` type, `EMPTY_MEASUREMENTS` constant, and new `mergeCompletedMeasurements` helper into a dedicated `live-measurements.ts` module in the React Vite demo for better separation of concerns and reusability.
+
+### Tests
+
+- Added `test/live-measurements.test.ts` to cover both cases of `mergeCompletedMeasurements`: when the latency test is enabled (preserves latency-stage values) and when it is disabled (falls back to completed result values).
+- Added a regression test in `test/engine-regression.test.ts` verifying that the engine uses the latency-stage result as the source of truth for final latency and jitter values.
+
 ## 0.3.0
 
 ### New Features
