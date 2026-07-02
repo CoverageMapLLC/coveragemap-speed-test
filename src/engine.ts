@@ -506,7 +506,7 @@ export class SpeedTestEngine {
           params.latencyData?.medianJitter != null
             ? roundTo3Decimals(params.latencyData.medianJitter)
             : null,
-        latenciesList: params.latencyData?.latencies.map(roundTo3Decimals) ?? null,
+        latenciesList: params.latencyData?.latencies?.map(roundTo3Decimals) ?? null,
         downloadList:
           params.downloadResult?.snapshots.map((snapshot) => ({
             time: Math.round(snapshot.timeOffsetMs),
