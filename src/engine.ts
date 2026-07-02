@@ -363,11 +363,7 @@ export class SpeedTestEngine {
       });
 
       this.setStage('complete');
-      this.callbacks.onComplete?.(
-        roundTo3Decimals(downloadResult?.speedMbps ?? 0),
-        roundTo3Decimals(uploadResult?.speedMbps ?? 0),
-        roundTo3Decimals(latencyData?.minLatency ?? 0)
-      );
+      this.callbacks.onComplete?.(latencyData, downloadResult, uploadResult);
 
       if (!wasCancelled && !this.cancellationToken?.isCancelled) {
         this.uploadResults(testResults);

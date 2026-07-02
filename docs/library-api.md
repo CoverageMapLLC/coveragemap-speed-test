@@ -419,7 +419,11 @@ interface SpeedTestCallbacks {
   onDownloadResult?: (data: SpeedTestData) => void;
   onUploadProgress?: (snapshot: SpeedSnapshot) => void;
   onUploadResult?: (data: SpeedTestData) => void;
-  onComplete?: (downloadMbps: number, uploadMbps: number, latencyMs: number) => void;
+  onComplete?: (
+    latencyData: LatencyTestData | null,
+    downloadData: SpeedTestData | null,
+    uploadData: SpeedTestData | null
+  ) => void;
   onError?: (error: Error, stage: SpeedTestStage) => void;
 }
 ```
@@ -433,7 +437,7 @@ interface SpeedTestCallbacks {
 | `onDownloadResult` | `data: SpeedTestData` | Fired once when the sustained download stage completes with the final aggregated result. |
 | `onUploadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained upload stage. |
 | `onUploadResult` | `data: SpeedTestData` | Fired once when the sustained upload stage completes with the final aggregated result. |
-| `onComplete` | `downloadMbps, uploadMbps, latencyMs` | Fired after the run assembles final measurements. |
+| `onComplete` | `latencyData, downloadData, uploadData` | Fired after the run assembles final measurements. Each argument is the aggregated stage result, or `null` if that stage was not run. |
 | `onError` | `error: Error, stage: SpeedTestStage` | Fired for non-cancellation stage failures. Cancellation does not emit this. |
 
 ---
@@ -481,7 +485,7 @@ Typical successful progression for a full run:
 10. `onUploadProgress(snapshot)` — repeated
 11. `onUploadResult(data)`
 12. `onStageChange('complete')`
-13. `onComplete(downloadMbps, uploadMbps, latencyMs)`
+13. `onComplete(latencyData, downloadData, uploadData)`
 
 On failure: `onError(error, stage)` is emitted; subsequent stages do not run.
 

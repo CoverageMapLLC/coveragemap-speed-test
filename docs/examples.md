@@ -119,8 +119,16 @@ const engine = new SpeedTestEngine({
     onError: (error: Error, stage: SpeedTestStage) => {
       console.error(`error in ${stage}:`, error.message);
     },
-    onComplete: (download: number, upload: number, latency: number) => {
-      console.log('all stages done', { download, upload, latency });
+    onComplete: (
+      latency: LatencyTestData | null,
+      download: SpeedTestData | null,
+      upload: SpeedTestData | null
+    ) => {
+      console.log('all stages done', {
+        latency: latency?.minLatency,
+        download: download?.speedMbps,
+        upload: upload?.speedMbps,
+      });
     },
   },
 });
