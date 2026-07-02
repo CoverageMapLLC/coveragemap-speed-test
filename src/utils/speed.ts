@@ -3,9 +3,13 @@
  * Formula: bytes / (ms * 125) = Mbps
  * Derivation: 1 Mbps = 125,000 bytes/sec = 125 bytes/ms
  */
+export function roundTo3Decimals(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
 export function calculateSpeedMbps(bytes: number, durationMs: number): number {
   if (durationMs <= 0) return 0;
-  return bytes / (durationMs * 125);
+  return roundTo3Decimals(bytes / (durationMs * 125));
 }
 
 export function formatSpeed(mbps: number): string {

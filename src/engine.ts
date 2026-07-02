@@ -56,6 +56,7 @@ import { runDownloadEstimationTest } from './tests/download-estimation-test.js';
 import { runUploadEstimationTest } from './tests/upload-estimation-test.js';
 import { runDownloadSpeedTest } from './tests/download-speed-test.js';
 import { runUploadSpeedTest } from './tests/upload-speed-test.js';
+import { roundTo3Decimals } from './utils/speed.js';
 import type { ApiBaseUrlOverrides } from './api/config.js';
 import { SpeedTestApiClient } from './api/speed-api.js';
 import { CoverageMapApiClient } from './api/coveragemap-api.js';
@@ -362,11 +363,7 @@ export class SpeedTestEngine {
       });
 
       this.setStage('complete');
-      this.callbacks.onComplete?.(
-        downloadResult?.speedMbps ?? 0,
-        uploadResult?.speedMbps ?? 0,
-        latencyData?.minLatency ?? 0
-      );
+      this.callbacks.onComplete?.(latencyData, downloadResult, uploadResult);
 
       if (!wasCancelled && !this.cancellationToken?.isCancelled) {
         this.uploadResults(testResults);
@@ -487,23 +484,35 @@ export class SpeedTestEngine {
       wired: params.network.wired,
       measurements: {
         dateTime: params.startTime.toISOString(),
-        downloadSpeed: params.downloadResult?.speedMbps ?? null,
+        downloadSpeed:
+          params.downloadResult?.speedMbps != null
+            ? roundTo3Decimals(params.downloadResult.speedMbps)
+            : null,
         totalDownload: params.downloadResult?.bytes ?? null,
-        uploadSpeed: params.uploadResult?.speedMbps ?? null,
+        uploadSpeed:
+          params.uploadResult?.speedMbps != null
+            ? roundTo3Decimals(params.uploadResult.speedMbps)
+            : null,
         totalUpload: params.uploadResult?.bytes ?? null,
-        latency: params.latencyData?.minLatency ?? null,
-        jitter: params.latencyData?.minJitter ?? null,
-        latenciesList: params.latencyData?.latencies ?? null,
+        latency:
+          params.latencyData?.minLatency != null
+            ? roundTo3Decimals(params.latencyData.minLatency)
+            : null,
+        jitter:
+          params.latencyData?.medianJitter != null
+            ? roundTo3Decimals(params.latencyData.medianJitter)
+            : null,
+        latenciesList: params.latencyData?.latencies?.map(roundTo3Decimals) ?? null,
         downloadList:
           params.downloadResult?.snapshots.map((snapshot) => ({
             time: Math.round(snapshot.timeOffsetMs),
-            speed: snapshot.speedMbps,
+            speed: roundTo3Decimals(snapshot.speedMbps),
             data: snapshot.bytes,
           })) ?? null,
         uploadList:
           params.uploadResult?.snapshots.map((snapshot) => ({
             time: Math.round(snapshot.timeOffsetMs),
-            speed: snapshot.speedMbps,
+            speed: roundTo3Decimals(snapshot.speedMbps),
             data: snapshot.bytes,
           })) ?? null,
         failedReason: params.failedReason,

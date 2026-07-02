@@ -47,9 +47,31 @@ class ThroughputSocketMock {
   }
 }
 
+class ReplenishingDownloadSocketMock extends ThroughputSocketMock {
+  static commands: string[] = [];
+
+  send(payload: string | Uint8Array): void {
+    if (typeof payload !== 'string' || !payload.startsWith('START')) return;
+
+    ReplenishingDownloadSocketMock.commands.push(payload);
+    if (ReplenishingDownloadSocketMock.commands.length > 1) return;
+
+    const [, kb, count] = payload.split(' ');
+    const frameBytes = Number(kb) * 1024;
+    const frameCount = Number(count);
+
+    for (let i = 0; i < frameCount; i++) {
+      setTimeout(() => {
+        this.onmessage?.({ data: new ArrayBuffer(frameBytes) } as MessageEvent);
+      }, 0);
+    }
+  }
+}
+
 describe('throughput protocol runners', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('runs download throughput and emits snapshots', async () => {
@@ -70,6 +92,31 @@ describe('throughput protocol runners', () => {
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.speedMbps).toBeGreaterThan(0);
     expect(snapshots.length).toBeGreaterThan(0);
+  });
+
+  it('requests a doubled download packet size after a batch is exhausted', async () => {
+    vi.useFakeTimers();
+    ReplenishingDownloadSocketMock.commands = [];
+    vi.stubGlobal('WebSocket', ReplenishingDownloadSocketMock as unknown as typeof WebSocket);
+
+    const promise = runDownloadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 64,
+      connectionCount: 1,
+      durationMs: 40,
+      latencyMs: 1,
+      jitterMs: 1,
+      snapshotIntervalMs: 10,
+      cancellationToken: new CancellationToken(),
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 500', 'START 128 500']);
+
+    await vi.advanceTimersByTimeAsync(39);
+    const result = await promise;
+    expect(result.bytes).toBe(64 * 1024 * 500);
   });
 
   it('runs upload throughput and tracks acknowledged bytes', async () => {

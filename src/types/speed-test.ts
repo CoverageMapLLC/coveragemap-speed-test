@@ -71,7 +71,11 @@ export interface SpeedTestCallbacks {
   onDownloadResult?: (data: SpeedTestData) => void;
   onUploadProgress?: (snapshot: SpeedSnapshot) => void;
   onUploadResult?: (data: SpeedTestData) => void;
-  onComplete?: (downloadMbps: number, uploadMbps: number, latencyMs: number) => void;
+  onComplete?: (
+    latencyData: LatencyTestData | null,
+    downloadData: SpeedTestData | null,
+    uploadData: SpeedTestData | null
+  ) => void;
   onError?: (error: Error, stage: SpeedTestStage) => void;
 }
 

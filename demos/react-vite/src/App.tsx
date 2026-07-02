@@ -98,8 +98,8 @@ export default function App() {
   const updateLatency = (data: LatencyTestData) => {
     setLiveMeasurements((previous) => ({
       ...previous,
-      latency: data.averageLatency,
-      jitter: data.averageJitter,
+      latency: data.minLatency,
+      jitter: data.medianJitter,
     }));
   };
 
