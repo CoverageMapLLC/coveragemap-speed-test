@@ -15,6 +15,7 @@ export interface DownloadSpeedTestOptions {
 }
 
 const ITERATION_COUNT = 500;
+const MAX_MESSAGE_SIZE_KB = 5 * 1024;
 
 export async function runDownloadSpeedTest(
   options: DownloadSpeedTestOptions
@@ -40,6 +41,8 @@ export async function runDownloadSpeedTest(
     let snapshotTimer: ReturnType<typeof setInterval> | null = null;
     const snapshots: SpeedSnapshot[] = [];
     const adjustmentMs = latencyMs + jitterMs;
+    const packetsRemainingBySocket = new Map<WebSocket, number>();
+    const messageSizeKbBySocket = new Map<WebSocket, number>();
 
     const cleanup = () => {
       if (snapshotTimer) clearInterval(snapshotTimer);
@@ -63,7 +66,7 @@ export async function runDownloadSpeedTest(
     };
 
     const finishTest = () => {
-      if (!testStartTime) {
+      if (testStartTime === null) {
         settle(reject, new Error('Test never started'));
         return;
       }
@@ -81,11 +84,25 @@ export async function runDownloadSpeedTest(
 
     cancellationToken.onCancel(() => settle(reject, new CancellationError()));
 
+    const sendDownloadRequest = (socket: WebSocket, requestMessageSizeKb: number) => {
+      if (settled || socket.readyState !== WebSocket.OPEN) return;
+
+      socket.send(`START ${requestMessageSizeKb} ${ITERATION_COUNT}`);
+      packetsRemainingBySocket.set(socket, ITERATION_COUNT);
+      messageSizeKbBySocket.set(socket, requestMessageSizeKb);
+    };
+
+    const refillDownloadRequest = (socket: WebSocket) => {
+      const currentMessageSizeKb = messageSizeKbBySocket.get(socket) ?? messageSizeKb;
+      const nextMessageSizeKb = Math.min(currentMessageSizeKb * 2, MAX_MESSAGE_SIZE_KB);
+      sendDownloadRequest(socket, nextMessageSizeKb);
+    };
+
     const startTest = () => {
       testStartTime = performance.now();
 
       snapshotTimer = setInterval(() => {
-        if (!testStartTime || settled) return;
+        if (testStartTime === null || settled) return;
         const elapsed = performance.now() - testStartTime;
         const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
         const speedMbps = calculateSpeedMbps(totalBytes, effectiveDurationMs);
@@ -103,7 +120,7 @@ export async function runDownloadSpeedTest(
       }, durationMs);
 
       for (const socket of sockets) {
-        socket.send(`START ${messageSizeKb} ${ITERATION_COUNT}`);
+        sendDownloadRequest(socket, messageSizeKb);
       }
     };
 
@@ -122,6 +139,12 @@ export async function runDownloadSpeedTest(
         socket.onmessage = (event) => {
           if (event.data instanceof ArrayBuffer) {
             totalBytes += event.data.byteLength;
+            const packetsRemaining = (packetsRemainingBySocket.get(socket) ?? 0) - 1;
+            packetsRemainingBySocket.set(socket, packetsRemaining);
+
+            if (packetsRemaining <= 0) {
+              refillDownloadRequest(socket);
+            }
           }
         };
 
