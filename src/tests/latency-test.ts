@@ -1,5 +1,6 @@
 import type { LatencyTestData } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
+import { roundTo3Decimals } from '../utils/speed.js';
 
 export interface LatencyTestOptions {
   serverUrl: string;
@@ -94,7 +95,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
         return;
       }
 
-      const pingTimeMs = now - pingStartTime;
+      const pingTimeMs = roundTo3Decimals(now - pingStartTime);
       pingTimes.push(pingTimeMs);
       onPing?.(pingTimeMs, pingTimes.length - 1);
 
@@ -142,13 +143,13 @@ function computeLatencyData(latencies: number[]): LatencyTestData {
 
   return {
     latencies,
-    minLatency,
-    averageLatency,
-    medianLatency,
-    maxLatency,
-    minJitter,
-    averageJitter,
-    medianJitter,
-    maxJitter,
+    minLatency: roundTo3Decimals(minLatency),
+    averageLatency: roundTo3Decimals(averageLatency),
+    medianLatency: roundTo3Decimals(medianLatency),
+    maxLatency: roundTo3Decimals(maxLatency),
+    minJitter: roundTo3Decimals(minJitter),
+    averageJitter: roundTo3Decimals(averageJitter),
+    medianJitter: roundTo3Decimals(medianJitter),
+    maxJitter: roundTo3Decimals(maxJitter),
   };
 }

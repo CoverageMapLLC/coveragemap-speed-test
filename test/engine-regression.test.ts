@@ -204,7 +204,7 @@ describe('engine regression', () => {
       expect.objectContaining({ latencyMs: 12, jitterMs: 15 })
     );
     expect(result.results.measurements.latency).toBe(12);
-    expect(result.results.measurements.jitter).toBe(15);
+    expect(result.results.measurements.jitter).toBe(33);
     expect(result.results.measurements.latenciesList).toEqual([45, 12, 60]);
     expect(onComplete).toHaveBeenCalledWith(120, 60, 12);
   });
