@@ -40,7 +40,7 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
     let uploadTimer: ReturnType<typeof setInterval> | null = null;
     const snapshots: SpeedSnapshot[] = [];
     const adjustmentMs = latencyMs + jitterMs;
-    const bufferSizeKb = Math.max(messageSizeKb * 8, 1024);
+    const bufferSizeKb = Math.max(messageSizeKb * 32, 1024);
     const messageBytes = messageSizeKb * 1024;
     const pendingBytesBySocket = new Map<WebSocket, number[]>();
     const loadedLatencyMonitor = createLoadedLatencyMonitor({
@@ -136,7 +136,6 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
 
     const startTest = () => {
       testStartTime = performance.now();
-      loadedLatencyMonitor.start();
 
       snapshotTimer = setInterval(() => {
         if (!testStartTime || settled) return;
@@ -152,12 +151,20 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
         onSnapshot?.(snapshot);
       }, snapshotIntervalMs);
 
-      uploadTimer = setInterval(sendBurst, 10);
-      sendBurst();
+      uploadTimer = setInterval(sendBurst, 5);
 
       setTimeout(() => {
         void finishTest();
       }, durationMs);
+
+      try {
+        loadedLatencyMonitor.start();
+      } catch (error) {
+        settle(reject, error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+
+      sendBurst();
     };
 
     for (let i = 0; i < connectionCount; i++) {

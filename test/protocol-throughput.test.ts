@@ -135,6 +135,72 @@ describe('throughput protocol runners', () => {
     expect(result.bytes).toBe(64 * 1024 * 500);
   });
 
+  it('rejects download when loaded latency WebSocket creation fails', async () => {
+    vi.useFakeTimers();
+    let socketCount = 0;
+    vi.stubGlobal(
+      'WebSocket',
+      class extends ThroughputSocketMock {
+        constructor(url: string) {
+          socketCount++;
+          if (socketCount > 1) {
+            throw new Error('loaded latency ws failed');
+          }
+          super(url);
+        }
+      } as unknown as typeof WebSocket
+    );
+
+    const promise = runDownloadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 64,
+      connectionCount: 1,
+      durationMs: 5000,
+      latencyMs: 1,
+      jitterMs: 1,
+      snapshotIntervalMs: 10,
+      cancellationToken: new CancellationToken(),
+    });
+    const expectation = expect(promise).rejects.toThrow('Failed to create loaded latency WebSocket');
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expectation;
+  });
+
+  it('rejects upload when loaded latency WebSocket creation fails', async () => {
+    vi.useFakeTimers();
+    let socketCount = 0;
+    vi.stubGlobal(
+      'WebSocket',
+      class extends ThroughputSocketMock {
+        constructor(url: string) {
+          socketCount++;
+          if (socketCount > 1) {
+            throw new Error('loaded latency ws failed');
+          }
+          super(url);
+        }
+      } as unknown as typeof WebSocket
+    );
+
+    const promise = runUploadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 8,
+      connectionCount: 1,
+      durationMs: 5000,
+      latencyMs: 1,
+      jitterMs: 1,
+      snapshotIntervalMs: 10,
+      cancellationToken: new CancellationToken(),
+    });
+    const expectation = expect(promise).rejects.toThrow('Failed to create loaded latency WebSocket');
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expectation;
+  });
+
   it('runs upload throughput and tracks acknowledged bytes', async () => {
     vi.stubGlobal('WebSocket', ThroughputSocketMock as unknown as typeof WebSocket);
     const result = await runUploadSpeedTest({

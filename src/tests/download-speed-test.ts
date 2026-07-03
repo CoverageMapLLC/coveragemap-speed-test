@@ -118,7 +118,6 @@ export async function runDownloadSpeedTest(
 
     const startTest = () => {
       testStartTime = performance.now();
-      loadedLatencyMonitor.start();
 
       snapshotTimer = setInterval(() => {
         if (testStartTime === null || settled) return;
@@ -137,6 +136,13 @@ export async function runDownloadSpeedTest(
       setTimeout(() => {
         void finishTest();
       }, durationMs);
+
+      try {
+        loadedLatencyMonitor.start();
+      } catch (error) {
+        settle(reject, error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
 
       for (const socket of sockets) {
         sendDownloadRequest(socket, messageSizeKb);
