@@ -226,7 +226,8 @@ describe('engine regression', () => {
         speedMbps: 60,
         snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
         loadedLatency: mockLoadedLatency,
-      }
+      },
+      result
     );
   });
 

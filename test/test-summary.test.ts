@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EMPTY_CALLBACK_STATE } from '../demos/react-vite/src/live-measurements';
 import { mockLoadedLatency } from './fixtures/speed-test-data.js';
-import { selectTestSummary } from '../demos/react-vite/src/test-summary';
+import { selectTestSummary } from '../demos/react-vite/src/test-summary-metrics';
 
 describe('test summary selection', () => {
   it('derives summary metrics from callback state', () => {
