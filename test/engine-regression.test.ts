@@ -209,6 +209,8 @@ describe('engine regression', () => {
     expect(result.results.measurements.latency).toBe(12);
     expect(result.results.measurements.jitter).toBe(33);
     expect(result.results.measurements.latenciesList).toEqual([45, 12, 60]);
+    expect(result.results.measurements.loadedDownloadLatencies).toEqual([15, 16, 14]);
+    expect(result.results.measurements.loadedUploadLatencies).toEqual([15, 16, 14]);
     expect(onComplete).toHaveBeenCalledWith(
       latencyResult,
       {

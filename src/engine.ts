@@ -363,7 +363,7 @@ export class SpeedTestEngine {
       });
 
       this.setStage('complete');
-      this.callbacks.onComplete?.(latencyData, downloadResult, uploadResult);
+      this.callbacks.onComplete?.(latencyData, downloadResult, uploadResult, testResults);
 
       if (!wasCancelled && !this.cancellationToken?.isCancelled) {
         this.uploadResults(testResults);
@@ -503,6 +503,10 @@ export class SpeedTestEngine {
             ? roundTo3Decimals(params.latencyData.medianJitter)
             : null,
         latenciesList: params.latencyData?.latencies?.map(roundTo3Decimals) ?? null,
+        loadedDownloadLatencies:
+          params.downloadResult?.loadedLatency?.latencies.map(roundTo3Decimals) ?? null,
+        loadedUploadLatencies:
+          params.uploadResult?.loadedLatency?.latencies.map(roundTo3Decimals) ?? null,
         downloadList:
           params.downloadResult?.snapshots.map((snapshot) => ({
             time: Math.round(snapshot.timeOffsetMs),

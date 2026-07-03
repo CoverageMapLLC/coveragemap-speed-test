@@ -297,6 +297,8 @@ interface NetworkTestResultMeasurements {
   latency: number | null;
   jitter: number | null;
   latenciesList: number[] | null;
+  loadedDownloadLatencies: number[] | null;
+  loadedUploadLatencies: number[] | null;
   downloadList: NetworkTestResultSpeedTimePair[] | null;
   uploadList: NetworkTestResultSpeedTimePair[] | null;
   failedReason: string | null;
@@ -311,6 +313,8 @@ interface NetworkTestResultSpeedTimePair {
 ```
 
 `downloadList` and `uploadList` are time-series samples (time offset, speed, bytes). `failedReason` / `failedStage` are set when the run does not complete successfully.
+
+`loadedDownloadLatencies` and `loadedUploadLatencies` are the individual RTT samples (in milliseconds, rounded to 3 decimal places) collected by the loaded latency monitor that ran concurrently during each throughput stage. Each element corresponds to one PING/PONG round trip measured while the link was saturated. Both fields are `null` when the corresponding stage was not run or when no ping round trips completed before the stage ended.
 
 ## `stages`
 

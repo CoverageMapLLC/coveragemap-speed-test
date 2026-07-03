@@ -219,7 +219,9 @@ engine.run() called
        │
        ├─ Stage 3: download ────────────────────────────────────────────┐
        │    │  N parallel sockets, sustained binary streaming           │
-       │    │  → SpeedTestData (speedMbps, bytes, snapshots[])         │
+       │    │  + 1 dedicated socket, PING/PONG every 1000 ms           │
+       │    │  → SpeedTestData (speedMbps, bytes, snapshots[],         │
+       │    │                   loadedLatency)                          │
        │    └────────────────────────────────────────────────────────────┘
        │
        │    [500 ms cooldown]
@@ -231,7 +233,9 @@ engine.run() called
        │
        └─ Stage 5: upload ──────────────────────────────────────────────┐
             │  N parallel sockets, burst binary sending                 │
-            │  → SpeedTestData (speedMbps, bytes, snapshots[])         │
+            │  + 1 dedicated socket, PING/PONG every 1000 ms           │
+            │  → SpeedTestData (speedMbps, bytes, snapshots[],         │
+            │                   loadedLatency)                          │
             └────────────────────────────────────────────────────────────┘
 
        Assemble NetworkTestResultTestResults
@@ -421,6 +425,30 @@ after durationMs:
 
 All sockets accumulate into a single `totalBytes` counter. The final speed is computed from the aggregate data across all connections.
 
+#### Loaded Latency Monitor
+
+A dedicated WebSocket connection is opened to the same server at the start of Stage 3. It sends a single `PING` text frame immediately on connect, then sends another `PING` every 1,000 ms after each `PONG` is received. RTT is measured with `performance.now()` at send and receive time.
+
+```
+[Stage 3 starts]
+LoadedLatencySocket ──── "PING" ──────────────────────────────► Server
+LoadedLatencySocket ◄─── "PONG" ───────────────────────────── Server
+  [wait 1000 ms]
+LoadedLatencySocket ──── "PING" ──────────────────────────────► Server
+LoadedLatencySocket ◄─── "PONG" ───────────────────────────── Server
+  ... (repeated until stage timer fires)
+
+[durationMs timer fires → finishTest() called]
+  → if a PING is in flight: wait up to 100 ms for final PONG (grace period)
+  → close LoadedLatencySocket
+  → compute LatencyTestData from collected RTTs
+  → attach as SpeedTestData.loadedLatency (null if no pings completed)
+```
+
+Because these probes run while the download sockets are saturating the link, the resulting RTT values reflect latency **under load** rather than idle baseline latency. Compare `loadedLatency.minLatency` against the pre-test `LatencyTestData.minLatency` to measure the latency increase caused by congestion.
+
+`loadedLatency` is `null` in the result if no PONG was received before the monitor stopped (e.g. the connection took longer to open than the stage duration).
+
 #### Defaults
 
 | Parameter | Default | Configurable range |
@@ -428,6 +456,8 @@ All sockets accumulate into a single `totalBytes` counter. The final speed is co
 | `downloadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
 | Iterations per START | 500 | (fixed) |
+| Loaded latency ping interval | 1,000 ms | (fixed) |
+| Loaded latency grace period | 100 ms | (fixed) |
 
 ---
 
@@ -504,7 +534,7 @@ Same lookup tables as download (see [Stage 3](#stage-3--download-throughput)), u
 ```
 Client ──── Uint8Array(chunk) ──────────────────────► Socket 0  ─┐
 Client ──── Uint8Array(chunk) ──────────────────────► Socket 1   │ repeated every
-Client ──── Uint8Array(chunk) ──────────────────────► Socket N   │ 10 ms for durationMs
+Client ──── Uint8Array(chunk) ──────────────────────► Socket N   │ 5 ms for durationMs
             [backpressure check per socket]                       │
 Client ◄─── "ACK" (optional, not counted for throughput) ◄──────┘
 ```
@@ -514,7 +544,7 @@ Client ◄─── "ACK" (optional, not counted for throughput) ◄────
 Each burst loop checks `socket.bufferedAmount` before sending. If the send buffer is full, the socket is skipped for that burst cycle:
 
 ```
-bufferSizeKb = max(messageSizeKb * 8, 1024)
+bufferSizeKb = max(messageSizeKb * 32, 1024)
 bufferThreshold = bufferSizeKb * 1024  // bytes
 
 for each socket:
@@ -522,9 +552,13 @@ for each socket:
   else: send chunks
 ```
 
-This prevents the internal socket buffer from growing unboundedly, which would inflate the effective `totalBytes` counter beyond what has actually been transmitted.
+This prevents the internal socket buffer from growing unboundedly, which would inflate the effective `totalBytes` counter beyond what has actually been transmitted. The larger multiplier (`× 32`) allows more data to be queued per socket, keeping the send pipeline full at higher link speeds.
 
 **Throughput is computed from sent bytes** (summed at the `socket.send()` call site), not from ACKs. ACKs may arrive but are not used for measurement.
+
+#### Loaded Latency Monitor
+
+Identical in design to the download stage loaded latency monitor. A dedicated PING/PONG WebSocket connection runs for the full duration of Stage 5, probing every 1,000 ms. The collected RTTs are attached to the upload result as `SpeedTestData.loadedLatency`. See the [download stage loaded latency description](#loaded-latency-monitor) for the full exchange sequence and timing details.
 
 #### Measurement Model
 
@@ -536,8 +570,10 @@ Identical to download: `snapshotIntervalMs` periodic snapshots and a wall-clock 
 |---|---|---|
 | `uploadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
-| Burst interval | 10 ms | (fixed) |
+| Burst interval | 5 ms | (fixed) |
 | Max chunk size | 1 MB | (fixed) |
+| Loaded latency ping interval | 1,000 ms | (fixed) |
+| Loaded latency grace period | 100 ms | (fixed) |
 
 ---
 
