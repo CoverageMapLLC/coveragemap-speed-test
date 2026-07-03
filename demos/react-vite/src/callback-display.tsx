@@ -47,7 +47,11 @@ function LatencyStatSummaries({ data }: { data: LatencyTestData }) {
   );
 }
 
-function LoadedLatencyContent({ data }: { data: LatencyTestData }) {
+function LoadedLatencyContent({ data }: { data: LatencyTestData | null }) {
+  if (!data) {
+    return <p className="muted">No loaded latency data collected.</p>;
+  }
+
   return (
     <>
       <LineChart

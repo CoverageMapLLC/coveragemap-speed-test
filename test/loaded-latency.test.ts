@@ -61,11 +61,12 @@ describe('loaded latency monitor', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     const result = await monitor.stop();
 
-    expect(result.latencies.length).toBeGreaterThan(0);
-    expect(result.minLatency).toBeGreaterThan(0);
+    expect(result).not.toBeNull();
+    expect(result!.latencies.length).toBeGreaterThan(0);
+    expect(result!.minLatency).toBeGreaterThan(0);
   });
 
-  it('rejects when no ping responses are received', async () => {
+  it('returns null when no ping responses are received', async () => {
     class SilentSocketMock extends LoadedLatencySocketMock {
       send(): void {
         // ignore pings
@@ -81,6 +82,6 @@ describe('loaded latency monitor', () => {
     monitor.start();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    await expect(monitor.stop()).rejects.toThrow('No loaded latency ping responses received');
+    await expect(monitor.stop()).resolves.toBeNull();
   });
 });

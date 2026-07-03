@@ -16,8 +16,8 @@ export function selectTestSummary(state: LiveCallbackState): TestSummaryMetrics 
     medianJitter: state.latencyResult?.medianJitter ?? null,
     downloadSpeed: state.downloadResult?.speedMbps ?? state.downloadProgress?.speedMbps ?? null,
     uploadSpeed: state.uploadResult?.speedMbps ?? state.uploadProgress?.speedMbps ?? null,
-    downloadLoadedLatency: state.downloadResult?.loadedLatency.medianLatency ?? null,
-    uploadLoadedLatency: state.uploadResult?.loadedLatency.medianLatency ?? null,
+    downloadLoadedLatency: state.downloadResult?.loadedLatency?.medianLatency ?? null,
+    uploadLoadedLatency: state.uploadResult?.loadedLatency?.medianLatency ?? null,
   };
 }
 

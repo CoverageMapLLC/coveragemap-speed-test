@@ -15,7 +15,7 @@ export interface LoadedLatencyTestOptions {
 
 export interface LoadedLatencyMonitor {
   start: () => void;
-  stop: () => Promise<LatencyTestData>;
+  stop: () => Promise<LatencyTestData | null>;
 }
 
 export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): LoadedLatencyMonitor {
@@ -27,8 +27,8 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
   let pingTimer: ReturnType<typeof setTimeout> | null = null;
   let isRunning = false;
   let isStopped = false;
-  let stopPromise: Promise<LatencyTestData> | null = null;
-  let stopResolve: ((data: LatencyTestData) => void) | null = null;
+  let stopPromise: Promise<LatencyTestData | null> | null = null;
+  let stopResolve: ((data: LatencyTestData | null) => void) | null = null;
   let stopReject: ((error: Error) => void) | null = null;
   let stopGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -58,7 +58,9 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
   const completeStop = () => {
     cleanup();
     if (pingTimes.length === 0) {
-      failStop(new Error('No loaded latency ping responses received'));
+      stopResolve?.(null);
+      stopResolve = null;
+      stopReject = null;
       return;
     }
     stopResolve?.(computeLatencyData(pingTimes));
@@ -146,10 +148,10 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
       };
     },
 
-    stop(): Promise<LatencyTestData> {
+    stop(): Promise<LatencyTestData | null> {
       if (stopPromise) return stopPromise;
 
-      stopPromise = new Promise<LatencyTestData>((resolve, reject) => {
+      stopPromise = new Promise<LatencyTestData | null>((resolve, reject) => {
         stopResolve = resolve;
         stopReject = reject;
 

@@ -37,7 +37,7 @@ export interface SpeedTestData {
   speedMbps: number;
   bytes: number;
   snapshots: SpeedSnapshot[];
-  loadedLatency: LatencyTestData;
+  loadedLatency: LatencyTestData | null;
 }
 
 export interface SpeedTestConfig {

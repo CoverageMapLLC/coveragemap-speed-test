@@ -1,4 +1,4 @@
-import type { SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
+import type { LatencyTestData, SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
 import { createLoadedLatencyMonitor } from './loaded-latency-test.js';
@@ -79,16 +79,14 @@ export async function runDownloadSpeedTest(
       const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
       const speedMbps = calculateSpeedMbps(totalBytes, effectiveDurationMs);
 
-      let loadedLatency;
+      let loadedLatency: LatencyTestData | null = null;
       try {
         loadedLatency = await loadedLatencyMonitor.stop();
       } catch (error) {
         if (error instanceof CancellationError) {
           settle(reject, error);
-        } else {
-          settle(reject, error instanceof Error ? error : new Error(String(error)));
+          return;
         }
-        return;
       }
 
       settle(resolve, {
