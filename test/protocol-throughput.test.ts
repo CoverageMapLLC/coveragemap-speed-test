@@ -25,6 +25,13 @@ class ThroughputSocketMock {
   }
 
   send(payload: string | Uint8Array): void {
+    if (payload === 'PING') {
+      setTimeout(() => {
+        this.onmessage?.({ data: 'PONG' } as MessageEvent);
+      }, 0);
+      return;
+    }
+
     if (typeof payload === 'string' && payload.startsWith('START')) {
       for (let i = 0; i < 5; i++) {
         setTimeout(() => {
@@ -51,6 +58,13 @@ class ReplenishingDownloadSocketMock extends ThroughputSocketMock {
   static commands: string[] = [];
 
   send(payload: string | Uint8Array): void {
+    if (payload === 'PING') {
+      setTimeout(() => {
+        this.onmessage?.({ data: 'PONG' } as MessageEvent);
+      }, 0);
+      return;
+    }
+
     if (typeof payload !== 'string' || !payload.startsWith('START')) return;
 
     ReplenishingDownloadSocketMock.commands.push(payload);
@@ -92,6 +106,8 @@ describe('throughput protocol runners', () => {
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.speedMbps).toBeGreaterThan(0);
     expect(snapshots.length).toBeGreaterThan(0);
+    expect(result.loadedLatency.latencies.length).toBeGreaterThan(0);
+    expect(result.loadedLatency.minLatency).toBeGreaterThan(0);
   });
 
   it('requests a doubled download packet size after a batch is exhausted', async () => {
@@ -134,5 +150,7 @@ describe('throughput protocol runners', () => {
 
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.speedMbps).toBeGreaterThan(0);
+    expect(result.loadedLatency.latencies.length).toBeGreaterThan(0);
+    expect(result.loadedLatency.minLatency).toBeGreaterThan(0);
   });
 });

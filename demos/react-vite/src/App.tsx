@@ -103,11 +103,21 @@ export default function App() {
     }));
   };
 
-  const updateFinalStageSpeed =
-    (key: 'downloadSpeed' | 'uploadSpeed') =>
-    (data: SpeedTestData) => {
-      setLiveMeasurements((previous) => ({ ...previous, [key]: data.speedMbps }));
-    };
+  const updateDownloadResult = (data: SpeedTestData) => {
+    setLiveMeasurements((previous) => ({
+      ...previous,
+      downloadSpeed: data.speedMbps,
+      downloadLoadedLatency: data.loadedLatency.minLatency,
+    }));
+  };
+
+  const updateUploadResult = (data: SpeedTestData) => {
+    setLiveMeasurements((previous) => ({
+      ...previous,
+      uploadSpeed: data.speedMbps,
+      uploadLoadedLatency: data.loadedLatency.minLatency,
+    }));
+  };
 
   const runTest = async () => {
     setError(null);
@@ -119,9 +129,9 @@ export default function App() {
       onStageChange: (nextStage) => setStage(nextStage),
       onLatencyResult: updateLatency,
       onDownloadProgress: updateDownload,
-      onDownloadResult: updateFinalStageSpeed('downloadSpeed'),
+      onDownloadResult: updateDownloadResult,
       onUploadProgress: updateUpload,
-      onUploadResult: updateFinalStageSpeed('uploadSpeed'),
+      onUploadResult: updateUploadResult,
     });
 
     try {
@@ -207,6 +217,14 @@ export default function App() {
           <div>
             <span>Jitter</span>
             <strong>{formatMbps(liveMeasurements.jitter)} ms</strong>
+          </div>
+          <div>
+            <span>Download Loaded Latency</span>
+            <strong>{formatMbps(liveMeasurements.downloadLoadedLatency)} ms</strong>
+          </div>
+          <div>
+            <span>Upload Loaded Latency</span>
+            <strong>{formatMbps(liveMeasurements.uploadLoadedLatency)} ms</strong>
           </div>
         </div>
       </section>

@@ -1,6 +1,7 @@
 import type { SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
+import { createLoadedLatencyMonitor } from './loaded-latency-test.js';
 
 export interface DownloadSpeedTestOptions {
   serverUrl: string;
@@ -43,6 +44,10 @@ export async function runDownloadSpeedTest(
     const adjustmentMs = latencyMs + jitterMs;
     const packetsRemainingBySocket = new Map<WebSocket, number>();
     const messageSizeKbBySocket = new Map<WebSocket, number>();
+    const loadedLatencyMonitor = createLoadedLatencyMonitor({
+      serverUrl,
+      cancellationToken,
+    });
 
     const cleanup = () => {
       if (snapshotTimer) clearInterval(snapshotTimer);
@@ -65,7 +70,7 @@ export async function runDownloadSpeedTest(
       (fn as (v: unknown) => void)(val);
     };
 
-    const finishTest = () => {
+    const finishTest = async () => {
       if (testStartTime === null) {
         settle(reject, new Error('Test never started'));
         return;
@@ -74,11 +79,24 @@ export async function runDownloadSpeedTest(
       const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
       const speedMbps = calculateSpeedMbps(totalBytes, effectiveDurationMs);
 
+      let loadedLatency;
+      try {
+        loadedLatency = await loadedLatencyMonitor.stop();
+      } catch (error) {
+        if (error instanceof CancellationError) {
+          settle(reject, error);
+        } else {
+          settle(reject, error instanceof Error ? error : new Error(String(error)));
+        }
+        return;
+      }
+
       settle(resolve, {
         durationMs: elapsed,
         speedMbps,
         bytes: totalBytes,
         snapshots,
+        loadedLatency,
       });
     };
 
@@ -100,6 +118,7 @@ export async function runDownloadSpeedTest(
 
     const startTest = () => {
       testStartTime = performance.now();
+      loadedLatencyMonitor.start();
 
       snapshotTimer = setInterval(() => {
         if (testStartTime === null || settled) return;
@@ -116,7 +135,7 @@ export async function runDownloadSpeedTest(
       }, snapshotIntervalMs);
 
       setTimeout(() => {
-        finishTest();
+        void finishTest();
       }, durationMs);
 
       for (const socket of sockets) {

@@ -18,6 +18,8 @@ describe('live measurement completion merge', () => {
       uploadSpeed: null,
       latency: 32,
       jitter: 7,
+      downloadLoadedLatency: 45,
+      uploadLoadedLatency: null,
     };
 
     const merged = mergeCompletedMeasurements(
@@ -29,6 +31,8 @@ describe('live measurement completion merge', () => {
           uploadSpeed: 40,
           latency: 12,
           jitter: 2,
+          downloadLoadedLatency: null,
+          uploadLoadedLatency: null,
         }
       )
     );
@@ -38,6 +42,8 @@ describe('live measurement completion merge', () => {
       uploadSpeed: 40,
       latency: 32,
       jitter: 7,
+      downloadLoadedLatency: 45,
+      uploadLoadedLatency: null,
     });
   });
 
@@ -47,6 +53,8 @@ describe('live measurement completion merge', () => {
       uploadSpeed: null,
       latency: null,
       jitter: null,
+      downloadLoadedLatency: null,
+      uploadLoadedLatency: null,
     };
 
     const merged = mergeCompletedMeasurements(
@@ -58,6 +66,8 @@ describe('live measurement completion merge', () => {
           uploadSpeed: 40,
           latency: 12,
           jitter: 2,
+          downloadLoadedLatency: null,
+          uploadLoadedLatency: null,
         }
       )
     );
@@ -67,6 +77,8 @@ describe('live measurement completion merge', () => {
       uploadSpeed: 40,
       latency: 12,
       jitter: 2,
+      downloadLoadedLatency: null,
+      uploadLoadedLatency: null,
     });
   });
 });

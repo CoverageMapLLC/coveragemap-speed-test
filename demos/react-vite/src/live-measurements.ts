@@ -3,6 +3,8 @@ export type LiveMeasurements = {
   uploadSpeed: number | null;
   latency: number | null;
   jitter: number | null;
+  downloadLoadedLatency: number | null;
+  uploadLoadedLatency: number | null;
 };
 
 export const EMPTY_MEASUREMENTS: LiveMeasurements = {
@@ -10,6 +12,8 @@ export const EMPTY_MEASUREMENTS: LiveMeasurements = {
   uploadSpeed: null,
   latency: null,
   jitter: null,
+  downloadLoadedLatency: null,
+  uploadLoadedLatency: null,
 };
 
 type CompletedMeasurements = {
@@ -34,5 +38,7 @@ export function mergeCompletedMeasurements(
     uploadSpeed: completedMeasurements.uploadSpeed,
     latency: completed.testType.testsRun.latency ? previous.latency : completedMeasurements.latency,
     jitter: completed.testType.testsRun.latency ? previous.jitter : completedMeasurements.jitter,
+    downloadLoadedLatency: previous.downloadLoadedLatency,
+    uploadLoadedLatency: previous.uploadLoadedLatency,
   };
 }
