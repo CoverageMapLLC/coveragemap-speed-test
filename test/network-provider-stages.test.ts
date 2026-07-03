@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mockLoadedLatency } from './fixtures/speed-test-data.js';
 
 const mocks = vi.hoisted(() => ({
   latencyMock: vi.fn(),
@@ -74,10 +75,12 @@ beforeEach(() => {
   mocks.downloadSpeedMock.mockResolvedValue({
     durationMs: 2000, bytes: 4_000_000, speedMbps: 120,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
+    loadedLatency: mockLoadedLatency,
   });
   mocks.uploadSpeedMock.mockResolvedValue({
     durationMs: 2000, bytes: 2_000_000, speedMbps: 60,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
+    loadedLatency: mockLoadedLatency,
   });
   mocks.uploadResultsMock.mockResolvedValue(undefined);
 });
@@ -261,7 +264,13 @@ describe('network provider — stage boundaries', () => {
     // Simulate switching from wifi to mobile mid-test (e.g. after download completes)
     mocks.downloadSpeedMock.mockImplementation(async () => {
       currentType = 'mobile';
-      return { durationMs: 2000, bytes: 4_000_000, speedMbps: 120, snapshots: [] };
+      return {
+        durationMs: 2000,
+        bytes: 4_000_000,
+        speedMbps: 120,
+        snapshots: [],
+        loadedLatency: mockLoadedLatency,
+      };
     });
 
     const result = await engine.run(testServer);

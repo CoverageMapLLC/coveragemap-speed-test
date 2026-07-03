@@ -1,6 +1,7 @@
-import type { SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
+import type { LatencyTestData, SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
+import { createLoadedLatencyMonitor } from './loaded-latency-test.js';
 
 export interface DownloadSpeedTestOptions {
   serverUrl: string;
@@ -15,6 +16,7 @@ export interface DownloadSpeedTestOptions {
 }
 
 const ITERATION_COUNT = 500;
+const MAX_MESSAGE_SIZE_KB = 5 * 1024;
 
 export async function runDownloadSpeedTest(
   options: DownloadSpeedTestOptions
@@ -40,6 +42,12 @@ export async function runDownloadSpeedTest(
     let snapshotTimer: ReturnType<typeof setInterval> | null = null;
     const snapshots: SpeedSnapshot[] = [];
     const adjustmentMs = latencyMs + jitterMs;
+    const packetsRemainingBySocket = new Map<WebSocket, number>();
+    const messageSizeKbBySocket = new Map<WebSocket, number>();
+    const loadedLatencyMonitor = createLoadedLatencyMonitor({
+      serverUrl,
+      cancellationToken,
+    });
 
     const cleanup = () => {
       if (snapshotTimer) clearInterval(snapshotTimer);
@@ -62,8 +70,8 @@ export async function runDownloadSpeedTest(
       (fn as (v: unknown) => void)(val);
     };
 
-    const finishTest = () => {
-      if (!testStartTime) {
+    const finishTest = async () => {
+      if (testStartTime === null) {
         settle(reject, new Error('Test never started'));
         return;
       }
@@ -71,21 +79,46 @@ export async function runDownloadSpeedTest(
       const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
       const speedMbps = calculateSpeedMbps(totalBytes, effectiveDurationMs);
 
+      let loadedLatency: LatencyTestData | null = null;
+      try {
+        loadedLatency = await loadedLatencyMonitor.stop();
+      } catch (error) {
+        if (error instanceof CancellationError) {
+          settle(reject, error);
+          return;
+        }
+      }
+
       settle(resolve, {
         durationMs: elapsed,
         speedMbps,
         bytes: totalBytes,
         snapshots,
+        loadedLatency,
       });
     };
 
     cancellationToken.onCancel(() => settle(reject, new CancellationError()));
 
+    const sendDownloadRequest = (socket: WebSocket, requestMessageSizeKb: number) => {
+      if (settled || socket.readyState !== WebSocket.OPEN) return;
+
+      socket.send(`START ${requestMessageSizeKb} ${ITERATION_COUNT}`);
+      packetsRemainingBySocket.set(socket, ITERATION_COUNT);
+      messageSizeKbBySocket.set(socket, requestMessageSizeKb);
+    };
+
+    const refillDownloadRequest = (socket: WebSocket) => {
+      const currentMessageSizeKb = messageSizeKbBySocket.get(socket) ?? messageSizeKb;
+      const nextMessageSizeKb = Math.min(currentMessageSizeKb * 2, MAX_MESSAGE_SIZE_KB);
+      sendDownloadRequest(socket, nextMessageSizeKb);
+    };
+
     const startTest = () => {
       testStartTime = performance.now();
 
       snapshotTimer = setInterval(() => {
-        if (!testStartTime || settled) return;
+        if (testStartTime === null || settled) return;
         const elapsed = performance.now() - testStartTime;
         const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
         const speedMbps = calculateSpeedMbps(totalBytes, effectiveDurationMs);
@@ -99,11 +132,18 @@ export async function runDownloadSpeedTest(
       }, snapshotIntervalMs);
 
       setTimeout(() => {
-        finishTest();
+        void finishTest();
       }, durationMs);
 
+      try {
+        loadedLatencyMonitor.start();
+      } catch (error) {
+        settle(reject, error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+
       for (const socket of sockets) {
-        socket.send(`START ${messageSizeKb} ${ITERATION_COUNT}`);
+        sendDownloadRequest(socket, messageSizeKb);
       }
     };
 
@@ -121,7 +161,16 @@ export async function runDownloadSpeedTest(
 
         socket.onmessage = (event) => {
           if (event.data instanceof ArrayBuffer) {
+            const currentPacketsRemaining = packetsRemainingBySocket.get(socket) ?? 0;
+            if (currentPacketsRemaining <= 0) return;
+
             totalBytes += event.data.byteLength;
+            const packetsRemaining = currentPacketsRemaining - 1;
+            packetsRemainingBySocket.set(socket, packetsRemaining);
+
+            if (packetsRemaining === 0) {
+              refillDownloadRequest(socket);
+            }
           }
         };
 

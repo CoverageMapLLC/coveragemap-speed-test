@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.0
+
+### New Features
+
+- **Loaded latency monitoring** — Download and upload speed tests now run a concurrent PING/PONG WebSocket connection throughout each stage. The measured RTTs (latency under load) are exposed as `SpeedTestData.loadedLatency` (`LatencyTestData | null`) on the download and upload results, enabling bufferbloat / under-load latency analysis.
+- **`loadedDownloadLatencies` and `loadedUploadLatencies` in result schema** — The `NetworkTestResultMeasurements` object now includes individual RTT sample arrays (`number[] | null`) collected by the loaded latency monitor during each throughput stage.
+
+### Breaking Changes
+
+- **`onComplete` callback signature changed** — The callback now receives structured stage result objects instead of raw numbers: `(latencyData: LatencyTestData | null, downloadData: SpeedTestData | null, uploadData: SpeedTestData | null, result: NetworkTestResultTestResults)`. Update any existing `onComplete` handlers accordingly.
+
+### Bug Fixes
+
+- **Jitter now reports median jitter** — The `jitterMs` field in test results was previously reporting `minJitter`; it now correctly reports `medianJitter`.
+- Fixed bug where download speed would drop near the end of the test if the download buffer ended
+
+### Improvements
+
+- **Upload performance** — Burst interval reduced from 10 ms to 5 ms and buffer size multiplier increased from ×8 to ×32, keeping the send pipeline full at higher link speeds.
+- **Measurement precision** — Numeric measurements (speed, latency, jitter) are now rounded to 3 decimal places before being submitted.
+
 ## 0.3.1
 
 ### Bug Fixes

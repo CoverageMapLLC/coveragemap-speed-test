@@ -3,20 +3,27 @@ import {
   SpeedTestEngine,
   formatBrowserDisplay,
   formatOSDisplay,
-  type LatencyTestData,
   type NetworkTestResultDevice,
   type NetworkTestResultLocation,
-  type SpeedSnapshot,
-  type SpeedTestData,
   type NetworkTestResultTestResults,
   type SpeedTestServer,
   type SpeedTestStage,
 } from '@coveragemap/speed-test';
 import {
-  EMPTY_MEASUREMENTS,
+  CompletePanel,
+  DownloadProgressPanel,
+  ErrorPanel,
+  LatencyDataPanel,
+  LatencyPingPanel,
+  SpeedTestDataPanel,
+  UploadProgressPanel,
+} from './callback-display';
+import {
+  EMPTY_CALLBACK_STATE,
   mergeCompletedMeasurements,
-  type LiveMeasurements,
+  type LiveCallbackState,
 } from './live-measurements';
+import { selectTestSummary, TestSummary } from './test-summary';
 
 const engine = new SpeedTestEngine({
   application: {
@@ -27,12 +34,6 @@ const engine = new SpeedTestEngine({
     type: 'web',
   },
 });
-
-function formatMbps(value: number | null | undefined): string {
-  if (value == null) return '-';
-  if (value < 10) return value.toFixed(1);
-  return Math.round(value).toString();
-}
 
 function formatCoordinate(value: number | null | undefined): string {
   if (value == null) return '-';
@@ -49,7 +50,7 @@ export default function App() {
   const [servers, setServers] = useState<SpeedTestServer[]>([]);
   const [selectedServerId, setSelectedServerId] = useState('');
   const [result, setResult] = useState<NetworkTestResultTestResults | null>(null);
-  const [liveMeasurements, setLiveMeasurements] = useState<LiveMeasurements>(EMPTY_MEASUREMENTS);
+  const [callbackState, setCallbackState] = useState<LiveCallbackState>(EMPTY_CALLBACK_STATE);
   const [device, setDevice] = useState<NetworkTestResultDevice | null>(null);
   const [location, setLocation] = useState<NetworkTestResultLocation | null>(null);
   const [isLoadingContext, setIsLoadingContext] = useState(true);
@@ -77,6 +78,8 @@ export default function App() {
     return servers.find((server) => server.id === selectedServerId) ?? null;
   }, [selectedServerId, servers]);
 
+  const testSummary = useMemo(() => selectTestSummary(callbackState), [callbackState]);
+
   const loadServers = async () => {
     setError(null);
     try {
@@ -87,47 +90,64 @@ export default function App() {
     }
   };
 
-  const updateDownload = (snapshot: SpeedSnapshot) => {
-    setLiveMeasurements((previous) => ({ ...previous, downloadSpeed: snapshot.speedMbps }));
-  };
-
-  const updateUpload = (snapshot: SpeedSnapshot) => {
-    setLiveMeasurements((previous) => ({ ...previous, uploadSpeed: snapshot.speedMbps }));
-  };
-
-  const updateLatency = (data: LatencyTestData) => {
-    setLiveMeasurements((previous) => ({
-      ...previous,
-      latency: data.averageLatency,
-      jitter: data.averageJitter,
-    }));
-  };
-
-  const updateFinalStageSpeed =
-    (key: 'downloadSpeed' | 'uploadSpeed') =>
-    (data: SpeedTestData) => {
-      setLiveMeasurements((previous) => ({ ...previous, [key]: data.speedMbps }));
-    };
-
   const runTest = async () => {
     setError(null);
     setResult(null);
-    setLiveMeasurements(EMPTY_MEASUREMENTS);
+    setCallbackState(EMPTY_CALLBACK_STATE);
     setIsRunning(true);
 
     engine.updateCallbacks({
       onStageChange: (nextStage) => setStage(nextStage),
-      onLatencyResult: updateLatency,
-      onDownloadProgress: updateDownload,
-      onDownloadResult: updateFinalStageSpeed('downloadSpeed'),
-      onUploadProgress: updateUpload,
-      onUploadResult: updateFinalStageSpeed('uploadSpeed'),
+      onLatencyPing: (latencyMs, index) => {
+        setCallbackState((previous) => ({
+          ...previous,
+          latencyPings: [...previous.latencyPings, { index, latencyMs }],
+        }));
+      },
+      onLatencyResult: (data) => {
+        setCallbackState((previous) => ({ ...previous, latencyResult: data }));
+      },
+      onDownloadProgress: (snapshot) => {
+        setCallbackState((previous) => ({
+          ...previous,
+          downloadProgress: snapshot,
+          downloadSnapshots: [...previous.downloadSnapshots, snapshot],
+        }));
+      },
+      onDownloadResult: (data) => {
+        setCallbackState((previous) => ({ ...previous, downloadResult: data }));
+      },
+      onUploadProgress: (snapshot) => {
+        setCallbackState((previous) => ({
+          ...previous,
+          uploadProgress: snapshot,
+          uploadSnapshots: [...previous.uploadSnapshots, snapshot],
+        }));
+      },
+      onUploadResult: (data) => {
+        setCallbackState((previous) => ({ ...previous, uploadResult: data }));
+      },
+      onComplete: (latency, download, upload) => {
+        setCallbackState((previous) => ({
+          ...previous,
+          complete: { latency, download, upload },
+        }));
+      },
+      onError: (callbackError, callbackStage) => {
+        setCallbackState((previous) => ({
+          ...previous,
+          lastError: {
+            message: callbackError.message,
+            stage: callbackStage,
+          },
+        }));
+      },
     });
 
     try {
       const completed = selectedServer ? await engine.run(selectedServer) : await engine.run();
       setResult(completed);
-      setLiveMeasurements((previous) => mergeCompletedMeasurements(previous, completed));
+      setCallbackState((previous) => mergeCompletedMeasurements(previous, completed));
       setStage('complete');
     } catch (err) {
       setStage('error');
@@ -141,7 +161,8 @@ export default function App() {
     <main className="container">
       <h1>CoverageMap Speed Test Example</h1>
       <p className="subtitle">
-        This sample app runs `@coveragemap/speed-test` in a browser.
+        This sample app runs `@coveragemap/speed-test` in a browser and displays every callback
+        payload live.
       </p>
 
       <section className="card controls">
@@ -180,36 +201,64 @@ export default function App() {
           </span>
         </label>
 
-        <p>
-          <strong>Stage:</strong> {stage}
+        <p className="stage-line">
+          <span className="stage-label">onStageChange</span>
+          <span className={`stage-pill stage-${stage}`}>{stage}</span>
         </p>
         {error && <p className="error">{error}</p>}
       </section>
 
+      <TestSummary metrics={testSummary} isRunning={isRunning} />
+
       <section className="card metrics">
         <div className="metrics-header">
-          <h2>Live Result</h2>
-          {isRunning && <span className="live-pill">Updating live</span>}
+          <h2>Callback Payloads</h2>
         </div>
-        <div className="grid">
-          <div>
-            <span>Download</span>
-            <strong>{formatMbps(liveMeasurements.downloadSpeed)} Mbps</strong>
-          </div>
-          <div>
-            <span>Upload</span>
-            <strong>{formatMbps(liveMeasurements.uploadSpeed)} Mbps</strong>
-          </div>
-          <div>
-            <span>Latency</span>
-            <strong>{formatMbps(liveMeasurements.latency)} ms</strong>
-          </div>
-          <div>
-            <span>Jitter</span>
-            <strong>{formatMbps(liveMeasurements.jitter)} ms</strong>
-          </div>
+        <div className="callback-sections">
+          <LatencyPingPanel pings={callbackState.latencyPings} />
+          <LatencyDataPanel data={callbackState.latencyResult} />
+          <DownloadProgressPanel snapshots={callbackState.downloadSnapshots} />
+          <SpeedTestDataPanel
+            title="onDownloadResult"
+            description="Final download speed, bytes, and loaded latency stats."
+            data={callbackState.downloadResult}
+            accent="download"
+          />
+          <UploadProgressPanel snapshots={callbackState.uploadSnapshots} />
+          <SpeedTestDataPanel
+            title="onUploadResult"
+            description="Final upload speed, bytes, and loaded latency stats."
+            data={callbackState.uploadResult}
+            accent="upload"
+          />
+          <CompletePanel complete={callbackState.complete} />
+          <ErrorPanel error={callbackState.lastError} />
         </div>
       </section>
+
+      {result && (
+        <section className="card context">
+          <h2>Uploaded Result Summary</h2>
+          <dl className="detail-list">
+            <div>
+              <dt>Download speed</dt>
+              <dd>{result.results.measurements.downloadSpeed ?? '-'} Mbps</dd>
+            </div>
+            <div>
+              <dt>Upload speed</dt>
+              <dd>{result.results.measurements.uploadSpeed ?? '-'} Mbps</dd>
+            </div>
+            <div>
+              <dt>Latency</dt>
+              <dd>{result.results.measurements.latency ?? '-'} ms</dd>
+            </div>
+            <div>
+              <dt>Jitter</dt>
+              <dd>{result.results.measurements.jitter ?? '-'} ms</dd>
+            </div>
+          </dl>
+        </section>
+      )}
 
       <section className="card context">
         <div className="metrics-header">

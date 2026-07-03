@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { calculateSpeedMbps, formatBytes, formatLatency, formatSpeed } from '../src/utils/speed.js';
+import { calculateSpeedMbps, formatBytes, formatLatency, formatSpeed, roundTo3Decimals } from '../src/utils/speed.js';
 
 describe('speed utility helpers', () => {
   it('calculates Mbps from bytes and milliseconds', () => {
     expect(calculateSpeedMbps(125_000, 1000)).toBe(1);
     expect(calculateSpeedMbps(0, 1000)).toBe(0);
     expect(calculateSpeedMbps(1_000, 0)).toBe(0);
+  });
+
+  it('rounds numeric measurements to three decimal places', () => {
+    expect(roundTo3Decimals(12.3456)).toBe(12.346);
+    expect(roundTo3Decimals(0.0004)).toBe(0);
+    expect(calculateSpeedMbps(1_000_000, 3333)).toBe(2.4);
   });
 
   it('formats speed with threshold precision', () => {

@@ -6,6 +6,7 @@ import {
   type DeviceMetadataProviderConfig,
 } from '../src/utils/device-info.js';
 import type { NetworkTestResultDevice } from '../src/types/test-results.js';
+import { mockLoadedLatency } from './fixtures/speed-test-data.js';
 
 const mocks = vi.hoisted(() => ({
   latencyMock: vi.fn(),
@@ -137,10 +138,12 @@ beforeEach(() => {
   mocks.downloadSpeedMock.mockResolvedValue({
     durationMs: 2000, bytes: 4_000_000, speedMbps: 120,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
+    loadedLatency: mockLoadedLatency,
   });
   mocks.uploadSpeedMock.mockResolvedValue({
     durationMs: 2000, bytes: 2_000_000, speedMbps: 60,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
+    loadedLatency: mockLoadedLatency,
   });
   mocks.uploadResultsMock.mockResolvedValue(undefined);
 });

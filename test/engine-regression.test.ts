@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NetworkTestResultTestResults } from '../src/types/test-results.js';
 import { CancellationError } from '../src/utils/cancellation.js';
+import { mockLoadedLatency } from './fixtures/speed-test-data.js';
 
 const mocks = vi.hoisted(() => ({
   latencyMock: vi.fn(),
@@ -97,12 +98,14 @@ beforeEach(() => {
     bytes: 4_000_000,
     speedMbps: 120,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
+    loadedLatency: mockLoadedLatency,
   });
   mocks.uploadSpeedMock.mockResolvedValue({
     durationMs: 2000,
     bytes: 2_000_000,
     speedMbps: 60,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
+    loadedLatency: mockLoadedLatency,
   });
   mocks.uploadResultsMock.mockResolvedValue(undefined);
 });
@@ -204,9 +207,28 @@ describe('engine regression', () => {
       expect.objectContaining({ latencyMs: 12, jitterMs: 15 })
     );
     expect(result.results.measurements.latency).toBe(12);
-    expect(result.results.measurements.jitter).toBe(15);
+    expect(result.results.measurements.jitter).toBe(33);
     expect(result.results.measurements.latenciesList).toEqual([45, 12, 60]);
-    expect(onComplete).toHaveBeenCalledWith(120, 60, 12);
+    expect(result.results.measurements.loadedDownloadLatencies).toEqual([15, 16, 14]);
+    expect(result.results.measurements.loadedUploadLatencies).toEqual([15, 16, 14]);
+    expect(onComplete).toHaveBeenCalledWith(
+      latencyResult,
+      {
+        durationMs: 2000,
+        bytes: 4_000_000,
+        speedMbps: 120,
+        snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
+        loadedLatency: mockLoadedLatency,
+      },
+      {
+        durationMs: 2000,
+        bytes: 2_000_000,
+        speedMbps: 60,
+        snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
+        loadedLatency: mockLoadedLatency,
+      },
+      result
+    );
   });
 
   it('selects the first available server when none is provided', async () => {
@@ -540,6 +562,40 @@ describe('engine regression', () => {
     expect(result.results.measurements.failedStage).toBe('downloadStart');
   });
 
+  it('returns null latenciesList when latency stage fails before producing data', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const latencyError = new Error('latency stage exploded');
+    mocks.latencyMock.mockRejectedValueOnce(latencyError);
+    const onError = vi.fn();
+
+    const engine = new SpeedTestEngine({
+      application: applicationMetadata,
+      callbacks: { onError },
+    });
+
+    const result = await engine.run({
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    });
+
+    expect(onError).toHaveBeenCalledWith(latencyError, 'latency');
+    expect(result.results.measurements.failedReason).toBe('latency stage exploded');
+    expect(result.results.measurements.failedStage).toBe('latencyStart');
+    expect(result.results.measurements.latenciesList).toBeNull();
+    expect(result.results.measurements.latency).toBeNull();
+    expect(result.results.measurements.jitter).toBeNull();
+  });
+
   it('marks cancellation failures without calling onError', async () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
     mocks.latencyMock.mockRejectedValueOnce(new CancellationError());
@@ -567,6 +623,9 @@ describe('engine regression', () => {
 
     expect(result.results.measurements.failedReason).toBe('Cancelled');
     expect(result.results.measurements.failedStage).toBe('latency');
+    expect(result.results.measurements.latenciesList).toBeNull();
+    expect(result.results.measurements.latency).toBeNull();
+    expect(result.results.measurements.jitter).toBeNull();
     expect(onError).not.toHaveBeenCalled();
     expect(mocks.uploadResultsMock).not.toHaveBeenCalled();
   });

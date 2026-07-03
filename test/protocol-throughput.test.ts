@@ -25,6 +25,13 @@ class ThroughputSocketMock {
   }
 
   send(payload: string | Uint8Array): void {
+    if (payload === 'PING') {
+      setTimeout(() => {
+        this.onmessage?.({ data: 'PONG' } as MessageEvent);
+      }, 0);
+      return;
+    }
+
     if (typeof payload === 'string' && payload.startsWith('START')) {
       for (let i = 0; i < 5; i++) {
         setTimeout(() => {
@@ -47,9 +54,72 @@ class ThroughputSocketMock {
   }
 }
 
+class ReplenishingDownloadSocketMock extends ThroughputSocketMock {
+  static commands: string[] = [];
+
+  send(payload: string | Uint8Array): void {
+    if (payload === 'PING') {
+      setTimeout(() => {
+        this.onmessage?.({ data: 'PONG' } as MessageEvent);
+      }, 0);
+      return;
+    }
+
+    if (typeof payload !== 'string' || !payload.startsWith('START')) return;
+
+    ReplenishingDownloadSocketMock.commands.push(payload);
+    if (ReplenishingDownloadSocketMock.commands.length > 1) return;
+
+    const [, kb, count] = payload.split(' ');
+    const frameBytes = Number(kb) * 1024;
+    const frameCount = Number(count);
+
+    for (let i = 0; i < frameCount; i++) {
+      setTimeout(() => {
+        this.onmessage?.({ data: new ArrayBuffer(frameBytes) } as MessageEvent);
+      }, 0);
+    }
+  }
+}
+
+class ReentrantExtraFrameDownloadSocketMock extends ThroughputSocketMock {
+  static commands: string[] = [];
+
+  send(payload: string | Uint8Array): void {
+    if (payload === 'PING') {
+      setTimeout(() => {
+        this.onmessage?.({ data: 'PONG' } as MessageEvent);
+      }, 0);
+      return;
+    }
+
+    if (typeof payload !== 'string' || !payload.startsWith('START')) return;
+
+    ReentrantExtraFrameDownloadSocketMock.commands.push(payload);
+
+    const [, kb, count] = payload.split(' ');
+    const frameBytes = Number(kb) * 1024;
+    const frameCount = Number(count);
+
+    if (ReentrantExtraFrameDownloadSocketMock.commands.length === 1) {
+      for (let i = 0; i < frameCount; i++) {
+        setTimeout(() => {
+          this.onmessage?.({ data: new ArrayBuffer(frameBytes) } as MessageEvent);
+        }, 0);
+      }
+      return;
+    }
+
+    if (ReentrantExtraFrameDownloadSocketMock.commands.length === 2) {
+      this.onmessage?.({ data: new ArrayBuffer(frameBytes) } as MessageEvent);
+    }
+  }
+}
+
 describe('throughput protocol runners', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('runs download throughput and emits snapshots', async () => {
@@ -70,6 +140,153 @@ describe('throughput protocol runners', () => {
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.speedMbps).toBeGreaterThan(0);
     expect(snapshots.length).toBeGreaterThan(0);
+    expect(result.loadedLatency).not.toBeNull();
+    expect(result.loadedLatency!.latencies.length).toBeGreaterThan(0);
+    expect(result.loadedLatency!.minLatency).toBeGreaterThan(0);
+  });
+
+  it('requests a doubled download packet size after a batch is exhausted', async () => {
+    vi.useFakeTimers();
+    ReplenishingDownloadSocketMock.commands = [];
+    vi.stubGlobal('WebSocket', ReplenishingDownloadSocketMock as unknown as typeof WebSocket);
+
+    const promise = runDownloadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 64,
+      connectionCount: 1,
+      durationMs: 40,
+      latencyMs: 1,
+      jitterMs: 1,
+      snapshotIntervalMs: 10,
+      cancellationToken: new CancellationToken(),
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 500', 'START 128 500']);
+
+    await vi.advanceTimersByTimeAsync(39);
+    const result = await promise;
+    expect(result.bytes).toBe(64 * 1024 * 500);
+  });
+
+  it('ignores extra download frames that arrive after a batch is exhausted', async () => {
+    vi.useFakeTimers();
+    ReentrantExtraFrameDownloadSocketMock.commands = [];
+    vi.stubGlobal('WebSocket', ReentrantExtraFrameDownloadSocketMock as unknown as typeof WebSocket);
+
+    const promise = runDownloadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 64,
+      connectionCount: 1,
+      durationMs: 40,
+      latencyMs: 1,
+      jitterMs: 1,
+      snapshotIntervalMs: 10,
+      cancellationToken: new CancellationToken(),
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(ReentrantExtraFrameDownloadSocketMock.commands).toEqual([
+      'START 64 500',
+      'START 128 500',
+    ]);
+
+    await vi.advanceTimersByTimeAsync(39);
+    const result = await promise;
+    expect(result.bytes).toBe(64 * 1024 * 500);
+  });
+
+  it('completes download when loaded latency monitor receives no PONG samples', async () => {
+    class SilentPingThroughputSocketMock extends ThroughputSocketMock {
+      send(payload: string | Uint8Array): void {
+        if (payload === 'PING') return;
+        super.send(payload);
+      }
+    }
+
+    vi.stubGlobal('WebSocket', SilentPingThroughputSocketMock as unknown as typeof WebSocket);
+    const result = await runDownloadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 64,
+      connectionCount: 1,
+      durationMs: 40,
+      latencyMs: 1,
+      jitterMs: 1,
+      snapshotIntervalMs: 10,
+      cancellationToken: new CancellationToken(),
+    });
+
+    expect(result.bytes).toBeGreaterThan(0);
+    expect(result.speedMbps).toBeGreaterThan(0);
+    expect(result.loadedLatency).toBeNull();
+  });
+
+  it('rejects download when loaded latency WebSocket creation fails', async () => {
+    vi.useFakeTimers();
+    let socketCount = 0;
+    vi.stubGlobal(
+      'WebSocket',
+      class extends ThroughputSocketMock {
+        constructor(url: string) {
+          socketCount++;
+          if (socketCount > 1) {
+            throw new Error('loaded latency ws failed');
+          }
+          super(url);
+        }
+      } as unknown as typeof WebSocket
+    );
+
+    const promise = runDownloadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 64,
+      connectionCount: 1,
+      durationMs: 5000,
+      latencyMs: 1,
+      jitterMs: 1,
+      snapshotIntervalMs: 10,
+      cancellationToken: new CancellationToken(),
+    });
+    const expectation = expect(promise).rejects.toThrow('Failed to create loaded latency WebSocket');
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expectation;
+  });
+
+  it('rejects upload when loaded latency WebSocket creation fails', async () => {
+    vi.useFakeTimers();
+    let socketCount = 0;
+    vi.stubGlobal(
+      'WebSocket',
+      class extends ThroughputSocketMock {
+        constructor(url: string) {
+          socketCount++;
+          if (socketCount > 1) {
+            throw new Error('loaded latency ws failed');
+          }
+          super(url);
+        }
+      } as unknown as typeof WebSocket
+    );
+
+    const promise = runUploadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 8,
+      connectionCount: 1,
+      durationMs: 5000,
+      latencyMs: 1,
+      jitterMs: 1,
+      snapshotIntervalMs: 10,
+      cancellationToken: new CancellationToken(),
+    });
+    const expectation = expect(promise).rejects.toThrow('Failed to create loaded latency WebSocket');
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expectation;
   });
 
   it('runs upload throughput and tracks acknowledged bytes', async () => {
@@ -87,5 +304,8 @@ describe('throughput protocol runners', () => {
 
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.speedMbps).toBeGreaterThan(0);
+    expect(result.loadedLatency).not.toBeNull();
+    expect(result.loadedLatency!.latencies.length).toBeGreaterThan(0);
+    expect(result.loadedLatency!.minLatency).toBeGreaterThan(0);
   });
 });
