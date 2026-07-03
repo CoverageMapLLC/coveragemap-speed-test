@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode, type SyntheticEvent } from 'react';
 
 type CollapsiblePanelProps = {
   title: string;
@@ -15,6 +15,16 @@ type CollapsibleSectionProps = {
   defaultOpen?: boolean;
 };
 
+function useCollapsible(defaultOpen: boolean) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>) => {
+    setOpen(event.currentTarget.open);
+  };
+
+  return { open, onToggle };
+}
+
 export function CollapsiblePanel({
   title,
   description,
@@ -23,10 +33,13 @@ export function CollapsiblePanel({
   wide = false,
   tone = 'default',
 }: CollapsiblePanelProps) {
+  const { open, onToggle } = useCollapsible(defaultOpen);
+
   return (
     <details
       className={`callback-panel ${wide ? 'callback-panel-wide' : ''} ${tone === 'error' ? 'callback-panel-error' : ''}`}
-      open={defaultOpen}
+      open={open}
+      onToggle={onToggle}
     >
       <summary className="callback-panel-summary">
         <span className="callback-panel-heading">
@@ -40,8 +53,10 @@ export function CollapsiblePanel({
 }
 
 export function CollapsibleSection({ title, children, defaultOpen = false }: CollapsibleSectionProps) {
+  const { open, onToggle } = useCollapsible(defaultOpen);
+
   return (
-    <details className="callback-section" open={defaultOpen}>
+    <details className="callback-section" open={open} onToggle={onToggle}>
       <summary className="callback-section-summary">{title}</summary>
       <div className="callback-section-body">{children}</div>
     </details>
