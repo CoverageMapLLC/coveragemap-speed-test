@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
 import {
   Area,
   AreaChart,
@@ -90,6 +90,7 @@ export function LineChart({
   emptyMessage = 'No samples yet.',
   embedded = false,
 }: LineChartProps) {
+  const gradientId = `line-chart-gradient-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const data = useMemo(
     () => points.map((point) => ({ x: point.x, y: point.y })),
     [points]
@@ -103,7 +104,7 @@ export function LineChart({
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
               <defs>
-                <linearGradient id={`gradient-${title.replace(/\s+/g, '-')}`} x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={color} stopOpacity={0.35} />
                   <stop offset="100%" stopColor={color} stopOpacity={0.02} />
                 </linearGradient>
@@ -140,7 +141,7 @@ export function LineChart({
                 type="monotone"
                 dataKey="y"
                 stroke={color}
-                fill={`url(#gradient-${title.replace(/\s+/g, '-')})`}
+                fill={`url(#${gradientId})`}
                 strokeWidth={2.5}
                 dot={{ r: 2.5, fill: color, stroke: '#0b1220', strokeWidth: 1.5 }}
                 activeDot={{ r: 4, fill: color, stroke: '#0b1220', strokeWidth: 1.5 }}
