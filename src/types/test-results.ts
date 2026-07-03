@@ -177,6 +177,8 @@ export interface NetworkTestResultMeasurements {
   latency: number | null;
   jitter: number | null;
   latenciesList: number[] | null;
+  loadedDownloadLatencies: number[] | null;
+  loadedUploadLatencies: number[] | null;
   downloadList: NetworkTestResultSpeedTimePair[] | null;
   uploadList: NetworkTestResultSpeedTimePair[] | null;
   failedReason: string | null;

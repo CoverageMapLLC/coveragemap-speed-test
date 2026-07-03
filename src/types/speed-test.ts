@@ -1,3 +1,5 @@
+import type { NetworkTestResultTestResults } from './test-results.js';
+
 export type SpeedTestStage =
   | 'idle'
   | 'latency'
@@ -37,6 +39,7 @@ export interface SpeedTestData {
   speedMbps: number;
   bytes: number;
   snapshots: SpeedSnapshot[];
+  loadedLatency: LatencyTestData | null;
 }
 
 export interface SpeedTestConfig {
@@ -74,7 +77,8 @@ export interface SpeedTestCallbacks {
   onComplete?: (
     latencyData: LatencyTestData | null,
     downloadData: SpeedTestData | null,
-    uploadData: SpeedTestData | null
+    uploadData: SpeedTestData | null,
+    result: NetworkTestResultTestResults
   ) => void;
   onError?: (error: Error, stage: SpeedTestStage) => void;
 }

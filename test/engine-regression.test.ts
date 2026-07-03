@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NetworkTestResultTestResults } from '../src/types/test-results.js';
 import { CancellationError } from '../src/utils/cancellation.js';
+import { mockLoadedLatency } from './fixtures/speed-test-data.js';
 
 const mocks = vi.hoisted(() => ({
   latencyMock: vi.fn(),
@@ -97,12 +98,14 @@ beforeEach(() => {
     bytes: 4_000_000,
     speedMbps: 120,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
+    loadedLatency: mockLoadedLatency,
   });
   mocks.uploadSpeedMock.mockResolvedValue({
     durationMs: 2000,
     bytes: 2_000_000,
     speedMbps: 60,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
+    loadedLatency: mockLoadedLatency,
   });
   mocks.uploadResultsMock.mockResolvedValue(undefined);
 });
@@ -206,6 +209,8 @@ describe('engine regression', () => {
     expect(result.results.measurements.latency).toBe(12);
     expect(result.results.measurements.jitter).toBe(33);
     expect(result.results.measurements.latenciesList).toEqual([45, 12, 60]);
+    expect(result.results.measurements.loadedDownloadLatencies).toEqual([15, 16, 14]);
+    expect(result.results.measurements.loadedUploadLatencies).toEqual([15, 16, 14]);
     expect(onComplete).toHaveBeenCalledWith(
       latencyResult,
       {
@@ -213,13 +218,16 @@ describe('engine regression', () => {
         bytes: 4_000_000,
         speedMbps: 120,
         snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
+        loadedLatency: mockLoadedLatency,
       },
       {
         durationMs: 2000,
         bytes: 2_000_000,
         speedMbps: 60,
         snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
-      }
+        loadedLatency: mockLoadedLatency,
+      },
+      result
     );
   });
 

@@ -120,7 +120,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
   });
 }
 
-function computeLatencyData(latencies: number[]): LatencyTestData {
+export function computeLatencyData(latencies: number[]): LatencyTestData {
   const sorted = [...latencies].sort((a, b) => a - b);
   const sum = sorted.reduce((a, b) => a + b, 0);
   const averageLatency = sum / sorted.length;

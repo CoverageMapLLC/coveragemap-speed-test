@@ -422,7 +422,8 @@ interface SpeedTestCallbacks {
   onComplete?: (
     latencyData: LatencyTestData | null,
     downloadData: SpeedTestData | null,
-    uploadData: SpeedTestData | null
+    uploadData: SpeedTestData | null,
+    result: NetworkTestResultTestResults
   ) => void;
   onError?: (error: Error, stage: SpeedTestStage) => void;
 }
@@ -434,10 +435,10 @@ interface SpeedTestCallbacks {
 | `onLatencyPing` | `latencyMs: number, index: number` | Fired after each individual ping response is received. `index` is 0-based. Only fires during the full latency stage; not fired for the silent single-ping fallback. |
 | `onLatencyResult` | `data: LatencyTestData` | Fired once when the full latency stage aggregation completes. |
 | `onDownloadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained download stage at `snapshotIntervalMs` intervals. |
-| `onDownloadResult` | `data: SpeedTestData` | Fired once when the sustained download stage completes with the final aggregated result. |
+| `onDownloadResult` | `data: SpeedTestData` | Fired once when the sustained download stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
 | `onUploadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained upload stage. |
-| `onUploadResult` | `data: SpeedTestData` | Fired once when the sustained upload stage completes with the final aggregated result. |
-| `onComplete` | `latencyData, downloadData, uploadData` | Fired after the run assembles final measurements. Each argument is the aggregated stage result, or `null` if that stage was not run. |
+| `onUploadResult` | `data: SpeedTestData` | Fired once when the sustained upload stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
+| `onComplete` | `latencyData, downloadData, uploadData, result` | Fired after the run assembles final measurements. The first three arguments are the aggregated stage results (`null` if that stage was not run). `result` is the complete `NetworkTestResultTestResults` payload — the same object returned by `run()` and uploaded to CoverageMap. |
 | `onError` | `error: Error, stage: SpeedTestStage` | Fired for non-cancellation stage failures. Cancellation does not emit this. |
 
 ---
@@ -485,7 +486,7 @@ Typical successful progression for a full run:
 10. `onUploadProgress(snapshot)` — repeated
 11. `onUploadResult(data)`
 12. `onStageChange('complete')`
-13. `onComplete(latencyData, downloadData, uploadData)`
+13. `onComplete(latencyData, downloadData, uploadData, result)`
 
 On failure: `onError(error, stage)` is emitted; subsequent stages do not run.
 
@@ -911,6 +912,7 @@ interface SpeedTestData {
   speedMbps: number;
   bytes: number;
   snapshots: SpeedSnapshot[];
+  loadedLatency: LatencyTestData | null;
 }
 ```
 
@@ -920,6 +922,9 @@ interface SpeedTestData {
 | `speedMbps` | `number` | Final throughput result in Mbps. |
 | `bytes` | `number` | Total bytes transferred during the stage. |
 | `snapshots` | `SpeedSnapshot[]` | All progress snapshots collected during the stage. |
+| `loadedLatency` | `LatencyTestData \| null` | Latency measurements collected concurrently while throughput was saturated. `null` if no pings were completed during the stage. |
+
+`loadedLatency` is measured by sending periodic PING/PONG probes over a dedicated WebSocket connection that runs in parallel throughout the entire download or upload stage. Because the link is under load during these probes, the values reflect real-world latency under congestion — sometimes called "bufferbloat" or "under-load latency" — rather than the idle RTT captured by the pre-test latency stage. Compare it against the pre-test [`LatencyTestData`](#latencytestdata) from `onLatencyResult` to quantify how much latency increases when the connection is saturated.
 
 ---
 
@@ -1164,6 +1169,9 @@ interface NetworkTestResultMeasurements {
   uploadMbps: number | null;
   latencyMs: number | null;
   jitterMs: number | null;
+  latenciesList: number[] | null;
+  loadedDownloadLatencies: number[] | null;
+  loadedUploadLatencies: number[] | null;
   downloadBytes: number | null;
   uploadBytes: number | null;
   downloadDurationMs: number | null;
@@ -1179,8 +1187,11 @@ interface NetworkTestResultMeasurements {
 |-------|------|-------------|
 | `downloadMbps` | `number \| null` | Final download throughput. |
 | `uploadMbps` | `number \| null` | Final upload throughput. |
-| `latencyMs` | `number \| null` | Median RTT. |
-| `jitterMs` | `number \| null` | Median jitter. |
+| `latencyMs` | `number \| null` | Median RTT from the pre-test latency stage. |
+| `jitterMs` | `number \| null` | Median jitter from the pre-test latency stage. |
+| `latenciesList` | `number[] \| null` | Individual RTT samples from the pre-test latency stage. |
+| `loadedDownloadLatencies` | `number[] \| null` | Individual RTT samples collected by the loaded latency monitor during the download stage. `null` if the download stage was skipped or no pings completed. |
+| `loadedUploadLatencies` | `number[] \| null` | Individual RTT samples collected by the loaded latency monitor during the upload stage. `null` if the upload stage was skipped or no pings completed. |
 | `downloadBytes` | `number \| null` | Total download bytes transferred. |
 | `uploadBytes` | `number \| null` | Total upload bytes transferred. |
 | `downloadDurationMs` | `number \| null` | Actual download stage duration. |

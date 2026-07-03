@@ -1,6 +1,7 @@
-import type { SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
+import type { LatencyTestData, SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
+import { createLoadedLatencyMonitor } from './loaded-latency-test.js';
 
 export interface UploadSpeedTestOptions {
   serverUrl: string;
@@ -39,9 +40,13 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
     let uploadTimer: ReturnType<typeof setInterval> | null = null;
     const snapshots: SpeedSnapshot[] = [];
     const adjustmentMs = latencyMs + jitterMs;
-    const bufferSizeKb = Math.max(messageSizeKb * 8, 1024);
+    const bufferSizeKb = Math.max(messageSizeKb * 32, 1024);
     const messageBytes = messageSizeKb * 1024;
     const pendingBytesBySocket = new Map<WebSocket, number[]>();
+    const loadedLatencyMonitor = createLoadedLatencyMonitor({
+      serverUrl,
+      cancellationToken,
+    });
 
     const cleanup = () => {
       if (snapshotTimer) clearInterval(snapshotTimer);
@@ -65,7 +70,7 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
       (fn as (v: unknown) => void)(val);
     };
 
-    const finishTest = () => {
+    const finishTest = async () => {
       if (!testStartTime) {
         settle(reject, new Error('Test never started'));
         return;
@@ -74,11 +79,22 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
       const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
       const speedMbps = calculateSpeedMbps(acknowledgedBytes, effectiveDurationMs);
 
+      let loadedLatency: LatencyTestData | null = null;
+      try {
+        loadedLatency = await loadedLatencyMonitor.stop();
+      } catch (error) {
+        if (error instanceof CancellationError) {
+          settle(reject, error);
+          return;
+        }
+      }
+
       settle(resolve, {
         durationMs: elapsed,
         speedMbps,
         bytes: acknowledgedBytes,
         snapshots,
+        loadedLatency,
       });
     };
 
@@ -133,12 +149,20 @@ export async function runUploadSpeedTest(options: UploadSpeedTestOptions): Promi
         onSnapshot?.(snapshot);
       }, snapshotIntervalMs);
 
-      uploadTimer = setInterval(sendBurst, 10);
-      sendBurst();
+      uploadTimer = setInterval(sendBurst, 5);
 
       setTimeout(() => {
-        finishTest();
+        void finishTest();
       }, durationMs);
+
+      try {
+        loadedLatencyMonitor.start();
+      } catch (error) {
+        settle(reject, error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+
+      sendBurst();
     };
 
     for (let i = 0; i < connectionCount; i++) {
