@@ -14,6 +14,7 @@
 ### Bug Fixes
 
 - **Jitter now reports median jitter** — The `jitterMs` field in test results was previously reporting `minJitter`; it now correctly reports `medianJitter`.
+- Fixed bug where download speed would drop near the end of the test if the download buffer ended
 
 ### Improvements
 
