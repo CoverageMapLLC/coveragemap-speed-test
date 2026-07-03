@@ -1,19 +1,48 @@
-export type LiveMeasurements = {
-  downloadSpeed: number | null;
-  uploadSpeed: number | null;
-  latency: number | null;
-  jitter: number | null;
-  downloadLoadedLatency: number | null;
-  uploadLoadedLatency: number | null;
+import type {
+  LatencyTestData,
+  SpeedSnapshot,
+  SpeedTestData,
+  SpeedTestStage,
+} from '../../../src/types/speed-test.js';
+
+export type LatencyPingEntry = {
+  index: number;
+  latencyMs: number;
 };
 
-export const EMPTY_MEASUREMENTS: LiveMeasurements = {
-  downloadSpeed: null,
-  uploadSpeed: null,
-  latency: null,
-  jitter: null,
-  downloadLoadedLatency: null,
-  uploadLoadedLatency: null,
+export type CallbackError = {
+  message: string;
+  stage: SpeedTestStage;
+};
+
+export type LiveCallbackState = {
+  latencyPings: LatencyPingEntry[];
+  latencyResult: LatencyTestData | null;
+  downloadProgress: SpeedSnapshot | null;
+  downloadSnapshots: SpeedSnapshot[];
+  downloadResult: SpeedTestData | null;
+  uploadProgress: SpeedSnapshot | null;
+  uploadSnapshots: SpeedSnapshot[];
+  uploadResult: SpeedTestData | null;
+  complete: {
+    latency: LatencyTestData | null;
+    download: SpeedTestData | null;
+    upload: SpeedTestData | null;
+  } | null;
+  lastError: CallbackError | null;
+};
+
+export const EMPTY_CALLBACK_STATE: LiveCallbackState = {
+  latencyPings: [],
+  latencyResult: null,
+  downloadProgress: null,
+  downloadSnapshots: [],
+  downloadResult: null,
+  uploadProgress: null,
+  uploadSnapshots: [],
+  uploadResult: null,
+  complete: null,
+  lastError: null,
 };
 
 type CompletedMeasurements = {
@@ -23,22 +52,42 @@ type CompletedMeasurements = {
     };
   };
   results: {
-    measurements: LiveMeasurements;
+    measurements: {
+      downloadSpeed: number | null;
+      uploadSpeed: number | null;
+      latency: number | null;
+      jitter: number | null;
+    };
   };
 };
 
 export function mergeCompletedMeasurements(
-  previous: LiveMeasurements,
+  previous: LiveCallbackState,
   completed: CompletedMeasurements
-): LiveMeasurements {
+): LiveCallbackState {
   const completedMeasurements = completed.results.measurements;
 
   return {
-    downloadSpeed: completedMeasurements.downloadSpeed,
-    uploadSpeed: completedMeasurements.uploadSpeed,
-    latency: completed.testType.testsRun.latency ? previous.latency : completedMeasurements.latency,
-    jitter: completed.testType.testsRun.latency ? previous.jitter : completedMeasurements.jitter,
-    downloadLoadedLatency: previous.downloadLoadedLatency,
-    uploadLoadedLatency: previous.uploadLoadedLatency,
+    ...previous,
+    latencyResult:
+      completed.testType.testsRun.latency && previous.latencyResult
+        ? previous.latencyResult
+        : previous.latencyResult ??
+          (completedMeasurements.latency != null
+            ? {
+                latencies: [],
+                minLatency: completedMeasurements.latency,
+                averageLatency: completedMeasurements.latency,
+                medianLatency: completedMeasurements.latency,
+                maxLatency: completedMeasurements.latency,
+                minJitter: completedMeasurements.jitter ?? 0,
+                averageJitter: completedMeasurements.jitter ?? 0,
+                medianJitter: completedMeasurements.jitter ?? 0,
+                maxJitter: completedMeasurements.jitter ?? 0,
+              }
+            : null),
+    downloadResult: previous.downloadResult,
+    uploadResult: previous.uploadResult,
+    complete: previous.complete,
   };
 }

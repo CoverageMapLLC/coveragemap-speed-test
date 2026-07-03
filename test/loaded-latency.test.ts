@@ -79,7 +79,7 @@ describe('loaded latency monitor', () => {
     });
 
     monitor.start();
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     await expect(monitor.stop()).rejects.toThrow('No loaded latency ping responses received');
   });

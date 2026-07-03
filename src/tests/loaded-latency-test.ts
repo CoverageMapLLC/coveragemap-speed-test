@@ -4,6 +4,7 @@ import { roundTo3Decimals } from '../utils/speed.js';
 import { computeLatencyData } from './latency-test.js';
 
 const DEFAULT_PING_INTERVAL_MS = 1000;
+const STOP_GRACE_MS = 100;
 
 export interface LoadedLatencyTestOptions {
   serverUrl: string;
@@ -29,10 +30,13 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
   let stopPromise: Promise<LatencyTestData> | null = null;
   let stopResolve: ((data: LatencyTestData) => void) | null = null;
   let stopReject: ((error: Error) => void) | null = null;
+  let stopGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
   const cleanup = () => {
     if (pingTimer) clearTimeout(pingTimer);
     pingTimer = null;
+    if (stopGraceTimer) clearTimeout(stopGraceTimer);
+    stopGraceTimer = null;
     try {
       if (socket && socket.readyState !== WebSocket.CLOSED) {
         socket.close();
@@ -159,15 +163,17 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
           return;
         }
 
-        try {
-          if (socket && socket.readyState !== WebSocket.CLOSED) {
-            socket.close();
-          } else {
+        stopGraceTimer = setTimeout(() => {
+          try {
+            if (socket && socket.readyState !== WebSocket.CLOSED) {
+              socket.close();
+            } else {
+              completeStop();
+            }
+          } catch {
             completeStop();
           }
-        } catch {
-          completeStop();
-        }
+        }, STOP_GRACE_MS);
       });
 
       return stopPromise;
