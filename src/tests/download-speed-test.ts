@@ -161,11 +161,14 @@ export async function runDownloadSpeedTest(
 
         socket.onmessage = (event) => {
           if (event.data instanceof ArrayBuffer) {
+            const currentPacketsRemaining = packetsRemainingBySocket.get(socket) ?? 0;
+            if (currentPacketsRemaining <= 0) return;
+
             totalBytes += event.data.byteLength;
-            const packetsRemaining = (packetsRemainingBySocket.get(socket) ?? 0) - 1;
+            const packetsRemaining = currentPacketsRemaining - 1;
             packetsRemainingBySocket.set(socket, packetsRemaining);
 
-            if (packetsRemaining <= 0) {
+            if (packetsRemaining === 0) {
               refillDownloadRequest(socket);
             }
           }

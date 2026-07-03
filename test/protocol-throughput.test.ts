@@ -82,6 +82,40 @@ class ReplenishingDownloadSocketMock extends ThroughputSocketMock {
   }
 }
 
+class ReentrantExtraFrameDownloadSocketMock extends ThroughputSocketMock {
+  static commands: string[] = [];
+
+  send(payload: string | Uint8Array): void {
+    if (payload === 'PING') {
+      setTimeout(() => {
+        this.onmessage?.({ data: 'PONG' } as MessageEvent);
+      }, 0);
+      return;
+    }
+
+    if (typeof payload !== 'string' || !payload.startsWith('START')) return;
+
+    ReentrantExtraFrameDownloadSocketMock.commands.push(payload);
+
+    const [, kb, count] = payload.split(' ');
+    const frameBytes = Number(kb) * 1024;
+    const frameCount = Number(count);
+
+    if (ReentrantExtraFrameDownloadSocketMock.commands.length === 1) {
+      for (let i = 0; i < frameCount; i++) {
+        setTimeout(() => {
+          this.onmessage?.({ data: new ArrayBuffer(frameBytes) } as MessageEvent);
+        }, 0);
+      }
+      return;
+    }
+
+    if (ReentrantExtraFrameDownloadSocketMock.commands.length === 2) {
+      this.onmessage?.({ data: new ArrayBuffer(frameBytes) } as MessageEvent);
+    }
+  }
+}
+
 describe('throughput protocol runners', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -130,6 +164,34 @@ describe('throughput protocol runners', () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 500', 'START 128 500']);
+
+    await vi.advanceTimersByTimeAsync(39);
+    const result = await promise;
+    expect(result.bytes).toBe(64 * 1024 * 500);
+  });
+
+  it('ignores extra download frames that arrive after a batch is exhausted', async () => {
+    vi.useFakeTimers();
+    ReentrantExtraFrameDownloadSocketMock.commands = [];
+    vi.stubGlobal('WebSocket', ReentrantExtraFrameDownloadSocketMock as unknown as typeof WebSocket);
+
+    const promise = runDownloadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 64,
+      connectionCount: 1,
+      durationMs: 40,
+      latencyMs: 1,
+      jitterMs: 1,
+      snapshotIntervalMs: 10,
+      cancellationToken: new CancellationToken(),
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(ReentrantExtraFrameDownloadSocketMock.commands).toEqual([
+      'START 64 500',
+      'START 128 500',
+    ]);
 
     await vi.advanceTimersByTimeAsync(39);
     const result = await promise;
