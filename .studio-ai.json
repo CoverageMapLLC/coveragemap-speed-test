@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "repository": {
+    "owner": "CoverageMapLLC",
+    "name": "coveragemap-speed-test"
+  },
+  "updatedAt": "2026-08-06T20:03:20.396Z",
+  "config": {
+    "name": "coveragemap-speed-test",
+    "description": "A JavaScript Speed Test library leveraging the CoverageMap Speed Test system and infrastructure",
+    "responsibilities": [],
+    "tags": [],
+    "instructions": "",
+    "branchMapping": {},
+    "relationships": []
+  }
+}
