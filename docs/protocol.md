@@ -156,6 +156,7 @@ interface SpeedTestServer {
   longitude: number | null;
   distance: number | null; // kilometers from client
   isCDN: boolean | null;
+  selfHosted?: boolean; // true only for self-hosted servers entered manually; never present in this list
 }
 ```
 

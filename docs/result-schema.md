@@ -211,8 +211,11 @@ interface SpeedTestServer {
   longitude: number | null;
   distance: number | null;
   isCDN: boolean | null;
+  selfHosted?: boolean;
 }
 ```
+
+`selfHosted` is `true` when the test ran against a self-hosted server that the user entered manually. CoverageMap stores those results but never maps them. See [Self-Hosted Servers](./self-hosted-servers.md).
 
 ### `results.location`
 

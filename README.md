@@ -161,6 +161,7 @@ A runnable React + Vite sample app is available in [`demos/react-vite`](./demos/
 | [Library API](./docs/library-api.md) | Full API reference |
 | [Result Schema](./docs/result-schema.md) | Result payload type definitions |
 | [Backend Integration](./docs/backend-integration.md) | Node.js / server-side usage guide |
+| [Self-Hosted Servers](./docs/self-hosted-servers.md) | Running tests against a self-hosted speed test server |
 | [Examples](./docs/examples.md) | Usage examples and recipes |
 
 ---
