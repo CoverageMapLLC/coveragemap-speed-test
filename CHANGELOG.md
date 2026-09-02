@@ -8,7 +8,7 @@
 
 ### Documentation
 
-- Added [Self-Hosted Servers](./docs/self-hosted-servers.md) describing the manual entry flow shared by the web, mobile, and CLI clients, and how to validate and run against a self-hosted server with this library.
+- Added [Self-Hosted Servers](./docs/self-hosted-servers.md) describing the manual entry flow shared by the web and mobile clients, and how to validate and run against a self-hosted server with this library.
 
 ## 0.4.0
 

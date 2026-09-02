@@ -25,7 +25,7 @@ No engine changes are required. `getServerWsUrl` already uses `wss://` for any s
 
 ## Manual entry flow
 
-Every client, web, mobile, and CLI, follows the same steps:
+Every client, web and mobile alike, follows the same steps:
 
 1. The user enters the host and port (default 443).
 2. The client requests `https://<host>:<port>/v1/server`.
@@ -132,9 +132,8 @@ Results from self-hosted servers upload to CoverageMap like any other test. The 
 
 - **Web:** the server picker has a "Use a self-hosted server" option that asks for host and port and remembers recent entries.
 - **Mobile:** the server selection screen has the same option, saved with the device settings.
-- **CLI:** `coveragemap-cli --server host:port` fetches, validates, and runs against the given server.
 
-All three perform the validation above and label the results as self-hosted.
+Both perform the validation above and label the results as self-hosted.
 
 ## Node.js considerations
 
