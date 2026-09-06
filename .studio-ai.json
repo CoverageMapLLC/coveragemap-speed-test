@@ -4,14 +4,32 @@
     "owner": "CoverageMapLLC",
     "name": "coveragemap-speed-test"
   },
-  "updatedAt": "2026-09-06T20:02:31.153Z",
+  "updatedAt": "2026-09-06T20:12:05.508Z",
   "config": {
-    "name": "coveragemap-speed-test",
+    "name": "Speed Testing NPM Library",
     "description": "A JavaScript Speed Test library leveraging the CoverageMap Speed Test system and infrastructure",
-    "responsibilities": [],
-    "tags": [],
+    "responsibilities": [
+      "An open-sourced NPM library to run speed tests against the CoverageMap speed testing network",
+      "Supports real-time apps for anyone to be able to run speed tests"
+    ],
+    "tags": [
+      "library",
+      "npm",
+      "open source"
+    ],
     "instructions": "",
     "branchMapping": {},
-    "relationships": []
+    "relationships": [
+      {
+        "kind": "consumedBy",
+        "repository": "CoverageMapLLC/coveragemap.com",
+        "note": "Sends the final speed test results to the Core API"
+      },
+      {
+        "kind": "dependsOn",
+        "repository": "CoverageMapLLC/speed-testing",
+        "note": "Manages the entire speed testing protocol, network, and servers"
+      }
+    ]
   }
 }
