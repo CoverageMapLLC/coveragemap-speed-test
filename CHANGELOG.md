@@ -6,10 +6,6 @@
 
 - **`selfHosted` on `SpeedTestServer`**: New optional boolean, set to `true` by self-hosted `@coveragemap/speed-test-server` instances in their `GET /v1/server` response. Pass that object to `engine.run(server)` to test against a self-hosted server. The flag travels through `results.server` untouched so CoverageMap can store the result without mapping it. No engine changes were needed: `wss://` is already used for every server whose `id` is not `local`.
 
-### Documentation
-
-- Added [Self-Hosted Servers](./docs/self-hosted-servers.md) describing the manual entry flow shared by the web and mobile clients, and how to validate and run against a self-hosted server with this library.
-
 ## 0.4.0
 
 ### New Features
