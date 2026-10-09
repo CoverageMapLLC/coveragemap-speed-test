@@ -1,3 +1,12 @@
+<p align="center">
+  <a href="https://coveragemap.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="./assets/coveragemap-logo-dark.svg">
+      <img alt="CoverageMap" src="./assets/coveragemap-logo.svg" width="360">
+    </picture>
+  </a>
+</p>
+
 # @coveragemap/speed-test
 
 [![npm](https://img.shields.io/npm/v/@coveragemap/speed-test)](https://www.npmjs.com/package/@coveragemap/speed-test)
