@@ -49,7 +49,24 @@ export interface SpeedTestConfig {
   snapshotIntervalMs: number;
   latencyTimeoutMs: number;
   estimationTimeoutMs: number;
+  /**
+   * Threads the download and upload stages spread their sockets across when the estimated
+   * speed is 1 Gbps or more. `0` (the default) chooses automatically, `1` keeps every socket
+   * on the calling thread. Extra threads are Node.js worker threads, used with raw TCP or
+   * with Node's built-in WebSocket; a WebSocket polyfill keeps every socket on the calling
+   * thread.
+   */
+  throughputThreads?: number;
+  /**
+   * How sockets connect to the server. `auto` (the default) uses raw TCP in Node.js when the
+   * server supports it, which needs far less client CPU at multi-gigabit speeds, and
+   * WebSocket otherwise. `websocket` always uses WebSocket. `tcp` always uses raw TCP and
+   * fails outside Node.js or against servers without it.
+   */
+  transport?: SpeedTestTransport;
 }
+
+export type SpeedTestTransport = 'auto' | 'websocket' | 'tcp';
 
 export interface SpeedTestSelection {
   latency?: boolean;
@@ -64,6 +81,8 @@ export const DEFAULT_CONFIG: SpeedTestConfig = {
   snapshotIntervalMs: 100,
   latencyTimeoutMs: 10000,
   estimationTimeoutMs: 15000,
+  throughputThreads: 0,
+  transport: 'auto',
 };
 
 export interface SpeedTestCallbacks {
@@ -83,6 +102,12 @@ export interface SpeedTestCallbacks {
   onError?: (error: Error, stage: SpeedTestStage) => void;
 }
 
+/**
+ * Sockets for stages estimated at 1 Gbps or more. Twelve spread evenly over the six threads
+ * the client uses and over the worker processes of a clustered server.
+ */
+const MULTI_GIGABIT_CONNECTION_COUNT = 12;
+
 export function getDownloadMessageSizeKb(estimatedMbps: number): number {
   if (estimatedMbps < 0.5) return 1;
   if (estimatedMbps < 1) return 16;
@@ -100,7 +125,7 @@ export function getDownloadConnectionCount(estimatedMbps: number): number {
   if (estimatedMbps < 10) return 4;
   if (estimatedMbps < 100) return 6;
   if (estimatedMbps < 1000) return 8;
-  return 10;
+  return MULTI_GIGABIT_CONNECTION_COUNT;
 }
 
 export function getUploadMessageSizeKb(estimatedMbps: number): number {
@@ -117,5 +142,21 @@ export function getUploadConnectionCount(estimatedMbps: number): number {
   if (estimatedMbps < 10) return 4;
   if (estimatedMbps < 100) return 6;
   if (estimatedMbps < 1000) return 8;
-  return 10;
+  return MULTI_GIGABIT_CONNECTION_COUNT;
+}
+
+/** Stages estimated below this use a single thread. */
+const MULTI_GIGABIT_MBPS = 1000;
+/** Threads for multi-gigabit stages: two sockets per thread. */
+const AUTO_THROUGHPUT_THREADS = MULTI_GIGABIT_CONNECTION_COUNT / 2;
+
+/**
+ * Threads for a throughput stage. Below 1 Gbps one thread is plenty. The estimate comes from
+ * one socket on one thread and tops out at a few Gbps, so anything above 1 Gbps may be far
+ * faster: those stages use `configuredThreads`, or 6 when it is 0. Worker threads are
+ * further limited to half the CPU cores.
+ */
+export function getThroughputThreadCount(estimatedMbps: number, configuredThreads = 0): number {
+  if (estimatedMbps < MULTI_GIGABIT_MBPS) return 1;
+  return configuredThreads > 0 ? configuredThreads : AUTO_THROUGHPUT_THREADS;
 }

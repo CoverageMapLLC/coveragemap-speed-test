@@ -17,6 +17,12 @@ export interface SpeedTestServer {
    * servers. Results from self-hosted servers are uploaded but never mapped.
    */
   selfHosted?: boolean;
+  /**
+   * Speed test protocols the server supports: a transport and the protocol version on it.
+   * `WSSv1` (secure WebSocket), `WSv1` (WebSocket), `TCPSv1` (raw TCP over TLS), and `TCPv1`
+   * (raw TCP). Absent for servers that predate the field, which only support `WSSv1`.
+   */
+  protocols?: string[];
 }
 
 export function getServerWsUrl(server: SpeedTestServer): string {

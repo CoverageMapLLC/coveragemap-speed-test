@@ -12,7 +12,7 @@ The package is designed to run in both browser and non-browser runtimes. In back
 - **Runtime and system telemetry** attached to each result through `device.coreSystem` — host name, process ID, platform, architecture, and runtime version.
 - **Flexible scheduling** — the engine is stateless and safe to call repeatedly in cron jobs, worker pools, or long-running polling loops.
 
-One important constraint: the engine uses WebSocket for the speed test protocol. Your runtime must expose `globalThis.WebSocket`. See [Providing WebSocket in Node](#providing-websocket-in-node) below for how to satisfy this in environments that do not ship it natively.
+One important constraint: the engine uses WebSocket for the speed test protocol, or raw TCP when the server offers it (see `config.transport`). Your runtime must expose `globalThis.WebSocket` for servers without raw TCP, such as CDN servers. See [Providing WebSocket in Node](#providing-websocket-in-node) below for how to satisfy this in environments that do not ship it natively.
 
 ---
 
@@ -370,7 +370,7 @@ For analytics and trend analysis:
 
 ## What backend mode does not support
 
-The package does not implement its own WebSocket transport. If `globalThis.WebSocket` is not available, the engine will throw before the test begins. This is the only hard dependency on your runtime environment.
+The package does not implement its own WebSocket client. Against servers that offer raw TCP it uses `@coveragemap/speed-transport` instead; against every other server it needs `globalThis.WebSocket` and fails the run without it. This is the only hard dependency on your runtime environment.
 
 Browser-specific fields (`device.browser`, `device.os`, connection type from the Network Information API) will be null in backend results. This is expected and documented in the [Result Schema](./result-schema.md).
 

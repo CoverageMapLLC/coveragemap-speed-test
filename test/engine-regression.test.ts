@@ -481,6 +481,18 @@ describe('engine regression', () => {
     );
   });
 
+  it('rejects an unknown transport', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+
+    expect(
+      () =>
+        new SpeedTestEngine({
+          application: applicationMetadata,
+          config: { transport: 'quic' as never },
+        })
+    ).toThrow("SpeedTestEngineOptions.config.transport must be 'auto', 'websocket', or 'tcp'");
+  });
+
   it('rejects invalid tests selection with no enabled tests', async () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
 

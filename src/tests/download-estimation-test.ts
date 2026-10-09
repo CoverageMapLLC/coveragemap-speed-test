@@ -1,6 +1,7 @@
 import type { SpeedEstimationResult } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
+import { SOCKET_CLOSED, openSocket } from './sockets.js';
 
 export interface DownloadEstimationTestOptions {
   serverUrl: string;
@@ -32,7 +33,7 @@ export async function runDownloadEstimationTest(
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
       try {
-        if (socket && socket.readyState !== WebSocket.CLOSED) socket.close();
+        if (socket && socket.readyState !== SOCKET_CLOSED) socket.close();
       } catch {
         // ignore
       }
@@ -66,7 +67,7 @@ export async function runDownloadEstimationTest(
     };
 
     try {
-      socket = new WebSocket(serverUrl);
+      socket = openSocket(serverUrl);
       socket.binaryType = 'arraybuffer';
     } catch (error) {
       reject(new Error(`Failed to create WebSocket: ${error}`));
@@ -108,7 +109,7 @@ export async function runDownloadEstimationTest(
         retries++;
         setTimeout(() => {
           try {
-            socket = new WebSocket(serverUrl);
+            socket = openSocket(serverUrl);
             socket.binaryType = 'arraybuffer';
             socket.onopen = handleOpen;
             socket.onmessage = handleMessage;

@@ -2,8 +2,21 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Multi-gigabit throughput in Node.js**: Download and upload stages estimated at 1 Gbps or more open 12 sockets (was 10) and, with Node's built-in WebSocket, spread them over 6 worker threads that report bytes through a `SharedArrayBuffer`. Against `@coveragemap/speed-test-server` on loopback this measures 11 Gbps each way over TLS and 15/13 Gbps without TLS (was 4.4/3.4 and 6.3/4.1). Applications that install a WebSocket polyfill keep every socket on the calling thread. No message changed; the only addition is the `CLOSE` command below, which servers that do not know it ignore.
+- **Continuous upload**: Each upload socket keeps two chunks queued and refills after acknowledgements instead of sending one message every 5 ms, reusing one preallocated chunk. Unacknowledged chunks are capped per socket and refills are time boxed so progress stays real time on busy clients.
+- **Slow links**: Download sockets send `CLOSE` when the stage ends, so leftover download frames no longer starve the upload stage. On 100 kbps to 1 Mbps links upload went from 0 to 7 kbps (or a timeout) to 95 to 99% of the link.
+
+### Bug Fixes
+
+- A throughput stage now fails when one of its sockets cannot connect. Previously the stage waited forever.
+
 ### New Features
 
+- **`protocols` on `SpeedTestServer`**: The transports a server accepts, with the speed test protocol version on each (`WSSv1`, `WSv1`, `TCPSv1`, `TCPv1`), as reported by the CoverageMap server list and by self-hosted servers. Servers that report none are treated as `["WSSv1"]`.
+- **Raw TCP transport in Node.js**: With the new `config.transport` (`auto` by default), the engine runs every stage over `tcps://` instead of `wss://` when the server lists raw TCP in its new `protocols` field (servers built on `@coveragemap/speed-transport` offer it on the same port). If the first raw TCP connection cannot open within 3 seconds, the run switches to WebSocket. The protocol and stages are unchanged; the frames are unmasked and download payloads are never copied. On loopback with TLS this measured 16.8/14.8 Gbps against 11.5/13.9 Gbps over WebSocket with 37% less client CPU on upload. Other servers, CDN servers, and browsers keep using WebSocket. `testType.testProtocol` reports `TCP` or `WSS`. Set `transport: 'websocket'` to opt out.
+- **`config.throughputThreads`**: Threads for multi-gigabit stages. `0` (default) picks automatically, `1` disables worker threads.
 - **`selfHosted` on `SpeedTestServer`**: New optional boolean, set to `true` by self-hosted `@coveragemap/speed-test-server` instances in their `GET /v1/server` response. Pass that object to `engine.run(server)` to test against a self-hosted server. The flag travels through `results.server` untouched so CoverageMap can store the result without mapping it. No engine changes were needed: `wss://` is already used for every server whose `id` is not `local`.
 
 ## 0.4.0

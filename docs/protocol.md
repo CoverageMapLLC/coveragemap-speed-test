@@ -53,10 +53,10 @@ Each phase is designed to be cancellable, resilient to transient failures, and p
 | Stable, repeatable measurements | Separate low-cost "estimation" pass from full-throughput pass |
 | Latency-aware throughput | Subtract RTT bias from all duration measurements |
 | Prevent measurement collapse on fast links | Adaptive payload sizing scales from 1 KB to 1 MB |
-| Parallel throughput saturation | Multi-socket concurrency (1–10 sockets) derived from estimation |
-| Backpressure safety on upload | Skip send loop when `bufferedAmount` exceeds threshold |
+| Parallel throughput saturation | Multi-socket concurrency (1–12 sockets) derived from estimation, spread across worker threads in Node.js for multi-gigabit stages |
+| Backpressure safety on upload | Keep `bufferedAmount` at two chunks and cap unacknowledged chunks per socket |
 | Deterministic promise lifecycle | Every stage settles its promise exactly once |
-| Browser and Node.js parity | Uses `globalThis.WebSocket` and `fetch`; no environment-specific code in runners |
+| Browser and Node.js parity | Runners only use the WebSocket API and `fetch`; in Node.js the same API can be backed by raw TCP |
 | Graceful failure | Every stage records `failedReason` and `failedStage`; results upload even on partial runs |
 
 ---
@@ -77,7 +77,7 @@ Each phase is designed to be cancellable, resilient to transient failures, and p
 │  │  4. runDownloadEstimation() ──────────────────────────► │──┼──► WSS /v1/ws  START <kb> 1
 │  │  5. runDownloadSpeedTest()  ──────────────────────────► │──┼──► WSS /v1/ws  START <kb> 500
 │  │  6. runUploadEstimation()   ──────────────────────────► │──┼──► WSS /v1/ws  binary chunks
-│  │  7. runUploadSpeedTest()    ──────────────────────────► │──┼──► WSS /v1/ws  binary bursts
+│  │  7. runUploadSpeedTest()    ──────────────────────────► │──┼──► WSS /v1/ws  binary chunks
 │  │  8. uploadResults()         ──────────────────────────► │──┼──► POST /api/v1/speedTests
 │  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
@@ -157,6 +157,7 @@ interface SpeedTestServer {
   distance: number | null; // kilometers from client
   isCDN: boolean | null;
   selfHosted?: boolean; // true only for self-hosted servers entered manually; never present in this list
+  protocols?: string[]; // transports and protocol versions, e.g. ["WSSv1", "WSv1", "TCPSv1", "TCPv1"]; absent means ["WSSv1"]
 }
 ```
 
@@ -198,6 +199,22 @@ Exception: servers with `id === "local"` use `ws://` (unencrypted) instead of `w
 
 The WebSocket `binaryType` is always set to `"arraybuffer"` so binary frames are delivered as `ArrayBuffer` objects.
 
+### Raw TCP Transport
+
+Servers report the transports they accept in `protocols`: `WSSv1` (secure WebSocket), `WSv1` (WebSocket), `TCPSv1` (raw TCP over TLS), and `TCPv1` (raw TCP), each with the speed test protocol version on it. Servers that report nothing predate the field and are treated as `["WSSv1"]`, and so is the Cloudflare CDN server.
+
+In Node.js, with `config.transport` set to `auto` (the default), the engine runs over raw TCP when the server lists `TCPSv1` (`TCPv1` for servers with `id === "local"`), on the same port as WebSocket. Servers built on [`@coveragemap/speed-transport`](https://github.com/CoverageMapLLC/speed-transport) offer it:
+
+```
+tcps://<server.domain>:<server.port>     (tcp:// for servers with id === "local")
+```
+
+The client opens a TLS connection and sends the 7 byte preamble `STCP/1\n`; the server echoes it. After that both sides exchange RFC 6455 frames without masking and without an HTTP handshake. Every command (`PING`, `START`, `CLOSE`, `ACK`, `PONG`) and every stage below is identical to WebSocket.
+
+The engine does not check for raw TCP before the run. Instead, the first stage's connection over raw TCP gets 3 seconds to open (TCP, TLS, and the preamble echo). If it is refused or not answered in time, for example on a network that only passes HTTP through a proxy, the engine repeats that stage over WebSocket and runs the rest of the test there. Failures after a connection opened do not switch transports. `transport: 'websocket'` and `transport: 'tcp'` skip all of this and use one transport.
+
+Raw TCP saves the client the WebSocket mask on every uploaded byte and lets it count downloaded frames without copying them. On loopback with TLS it measured 16.8/14.8 Gbps against 11.5/13.9 Gbps for WebSocket, with 37% less client CPU on upload. Browsers cannot open raw TCP connections and always use WebSocket. Results record the transport in `testType.testProtocol` (`TCP` or `WSS`).
+
 ### Stage Sequence
 
 A full test run executes five stages in order. Each stage uses one or more short-lived WebSocket connections that are closed when the stage completes.
@@ -233,7 +250,7 @@ engine.run() called
        │    └────────────────────────────────────────────────────────────┘
        │
        └─ Stage 5: upload ──────────────────────────────────────────────┐
-            │  N parallel sockets, burst binary sending                 │
+            │  N parallel sockets, continuous binary sending            │
             │  + 1 dedicated socket, PING/PONG every 1000 ms           │
             │  → SpeedTestData (speedMbps, bytes, snapshots[],         │
             │                   loadedLatency)                          │
@@ -375,7 +392,7 @@ Both are derived from the estimation result using lookup tables:
 | 1 – 10 Mbps | 4 |
 | 10 – 100 Mbps | 6 |
 | 100 – 1000 Mbps | 8 |
-| ≥ 1000 Mbps | 10 |
+| ≥ 1000 Mbps | 12 |
 
 **Download packet size (per `START` command):**
 
@@ -404,7 +421,13 @@ Client ◄─── binary frame ◄─── binary frame ◄──── binar
   [continuous streaming for durationMs, all sockets in parallel]
 ```
 
-The `500` iteration count instructs the server to send 500 frames per `START`. Each frame is approximately `<kb>` kilobytes. The test's wall-clock `durationMs` timer ends the stage regardless of how many frames were received.
+The `500` iteration count instructs the server to send 500 frames per `START`. Each frame is approximately `<kb>` kilobytes. When a socket has received all 500 frames it requests the next batch with twice the frame size, up to 5 MB. The test's wall-clock `durationMs` timer ends the stage regardless of how many frames were received.
+
+When the stage ends, each download socket sends the text command `CLOSE` before closing. The server ends the connection at once instead of first delivering every frame it has already queued, which on a slow link would otherwise occupy the downlink well into the next stage. Servers that do not know the command ignore it.
+
+#### Threads
+
+A single JavaScript thread cannot receive or send much more than about 5 Gbps over TLS. When the estimate is 1 Gbps or more (the single socket estimate tops out at a few Gbps however fast the link is), Node.js spreads the sockets across worker threads: 6 when `config.throughputThreads` is `0` (its default, which picks the count automatically), two sockets each, and never more than half the CPU cores. Each worker runs the same standard WebSocket code and publishes its byte count through a `SharedArrayBuffer`, so the main thread's snapshots stay real time. Worker threads are only used when their built-in `WebSocket` is the same implementation as the application's, so an application that installs a polyfill such as `ws` keeps every socket on the calling thread. Raw TCP lanes skip that check, since they do not depend on the global `WebSocket`, so they can use worker threads on every Node.js version; below 1 Gbps or with `throughputThreads: 1` they stay on the calling thread like WebSocket lanes. Browsers always use the calling thread.
 
 #### Measurement Model
 
@@ -520,7 +543,7 @@ Default: **15,000 ms** (configurable 3,000–30,000 ms).
 
 Same lookup tables as download (see [Stage 3](#stage-3--download-throughput)), using the upload estimation result as the input.
 
-**Upload packet size per burst:**
+**Upload chunk size:**
 
 | Estimated speed | Packet size |
 |---|---|
@@ -534,28 +557,27 @@ Same lookup tables as download (see [Stage 3](#stage-3--download-throughput)), u
 
 ```
 Client ──── Uint8Array(chunk) ──────────────────────► Socket 0  ─┐
-Client ──── Uint8Array(chunk) ──────────────────────► Socket 1   │ repeated every
-Client ──── Uint8Array(chunk) ──────────────────────► Socket N   │ 5 ms for durationMs
-            [backpressure check per socket]                       │
-Client ◄─── "ACK" (optional, not counted for throughput) ◄──────┘
+Client ──── Uint8Array(chunk) ──────────────────────► Socket 1   │ kept topped up
+Client ──── Uint8Array(chunk) ──────────────────────► Socket N   │ for durationMs
+Client ◄─── "ACK" (one per chunk, counted for throughput) ◄─────┘
 ```
 
 #### Backpressure Control
 
-Each burst loop checks `socket.bufferedAmount` before sending. If the send buffer is full, the socket is skipped for that burst cycle:
+Every socket reuses one preallocated chunk of at most 1 MB and keeps its send buffer topped up to two chunks (at least 16 KB). The WebSocket API has no drain event, so sockets are refilled after acknowledgements arrive and on a 5 ms timer:
 
 ```
-bufferSizeKb = max(messageSizeKb * 32, 1024)
-bufferThreshold = bufferSizeKb * 1024  // bytes
+target = max(2 × chunkBytes, 16 KB)
 
-for each socket:
-  if socket.bufferedAmount > bufferThreshold: skip
-  else: send chunks
+refill(socket):
+  while socket.bufferedAmount < target
+    and unacknowledged chunks < 64:
+    socket.send(chunk)
 ```
 
-This prevents the internal socket buffer from growing unboundedly, which would inflate the effective `totalBytes` counter beyond what has actually been transmitted. The larger multiplier (`× 32`) allows more data to be queued per socket, keeping the send pipeline full at higher link speeds.
+A refill stops after 4 ms of work, and acknowledgements that arrive together share one refill, so a client that is short of CPU still emits snapshots and loaded latency probes on time. The cap of 64 unacknowledged chunks bounds memory with WebSocket implementations that do not report `bufferedAmount`, while still covering the bandwidth-delay product of 1.7 Gbps per socket at a 300 ms round trip.
 
-**Throughput is computed from sent bytes** (summed at the `socket.send()` call site), not from ACKs. ACKs may arrive but are not used for measurement.
+**Throughput is computed from acknowledged bytes**: a chunk counts once the server's `ACK` for it arrives, so data still queued on the client is never counted.
 
 #### Loaded Latency Monitor
 
@@ -571,7 +593,7 @@ Identical to download: `snapshotIntervalMs` periodic snapshots and a wall-clock 
 |---|---|---|
 | `uploadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
-| Burst interval | 5 ms | (fixed) |
+| Refill timer | 5 ms | (fixed) |
 | Max chunk size | 1 MB | (fixed) |
 | Loaded latency ping interval | 1,000 ms | (fixed) |
 | Loaded latency grace period | 100 ms | (fixed) |
@@ -737,6 +759,8 @@ await engine.retryQueuedUploads();
 | `snapshotIntervalMs` | 100 | 50 | 5,000 | Progress snapshot interval (ms) |
 | `latencyTimeoutMs` | 10,000 | 3,000 | 30,000 | Timeout for latency stage (ms) |
 | `estimationTimeoutMs` | 15,000 | 3,000 | 30,000 | Timeout for estimation stages (ms) |
+| `throughputThreads` | 0 | 0 | 64 | Threads for stages estimated at 1 Gbps or more: `0` picks automatically (6), `1` keeps every socket on the calling thread. Node.js only (see [Threads](#threads)) |
+| `transport` | `'auto'` | | | `'auto'`, `'websocket'`, or `'tcp'`. `auto` uses raw TCP in Node.js when the server offers it (see [Raw TCP Transport](#raw-tcp-transport)) |
 
 Override any of these through `SpeedTestEngineOptions.config`:
 
@@ -755,10 +779,12 @@ const engine = new SpeedTestEngine({
 
 ## Backend Runtime Considerations
 
-The protocol runners use only `globalThis.WebSocket` and `globalThis.fetch` — no browser-specific APIs. In Node.js environments:
+The protocol runners use the WebSocket API and `globalThis.fetch` — no browser-specific APIs. In Node.js the sockets come from `globalThis.WebSocket`, or from `@coveragemap/speed-transport` when the run uses [raw TCP](#raw-tcp-transport). In Node.js environments:
 
-- **Node 22+** includes a native `WebSocket` implementation. No polyfill needed.
-- **Node 20 / 21**: install the `ws` package and assign it to `globalThis.WebSocket` before creating `SpeedTestEngine`.
+- Against servers that offer raw TCP (with `transport: 'auto'` or `'tcp'`), no WebSocket implementation is needed on any Node.js version, and multi-gigabit stages run their sockets on worker threads.
+- **Node 22+** includes a native `WebSocket` implementation for every other server. No polyfill needed, and multi-gigabit stages run their sockets on worker threads (see [Threads](#threads)).
+- With a polyfill such as `ws`, WebSocket sockets stay on the calling thread, which limits a test to roughly 5 Gbps over TLS.
+- **Node 20 / 21**: install the `ws` package and assign it to `globalThis.WebSocket` before creating `SpeedTestEngine`, for servers without raw TCP (including CDN servers).
 - `performance.now()` is available in Node.js via the `perf_hooks` module (globally available in Node 16+).
 - `localStorage` is not available in Node.js. The upload queue fallback (`saveToLocalQueue` / `flushUploadQueue`) will silently no-op if `localStorage` throws, which it will in a Node environment.
 

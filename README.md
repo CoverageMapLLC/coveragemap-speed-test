@@ -1,3 +1,12 @@
+<p align="center">
+  <a href="https://coveragemap.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="./assets/coveragemap-logo-dark.svg">
+      <img alt="CoverageMap" src="./assets/coveragemap-logo.svg" width="360">
+    </picture>
+  </a>
+</p>
+
 # @coveragemap/speed-test
 
 [![npm](https://img.shields.io/npm/v/@coveragemap/speed-test)](https://www.npmjs.com/package/@coveragemap/speed-test)
@@ -106,6 +115,8 @@ const engine = new SpeedTestEngine({
 | `config.snapshotIntervalMs` | 50–5000 | `100` | How often progress snapshots are emitted (ms) |
 | `config.latencyTimeoutMs` | 3000–30000 | `10000` | Latency phase timeout (ms) |
 | `config.estimationTimeoutMs` | 3000–30000 | `15000` | Estimation phase timeout (ms) |
+| `config.throughputThreads` | 0–64 | `0` | Node.js worker threads for multi-gigabit stages (`0` = automatic, `1` = calling thread only) |
+| `config.transport` | `auto`, `websocket`, `tcp` | `auto` | `auto` uses raw TCP in Node.js when the server offers it and WebSocket otherwise |
 
 **Providers** — set after construction or at the module level:
 
