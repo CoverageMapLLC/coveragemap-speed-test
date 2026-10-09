@@ -168,7 +168,9 @@ export async function openWorkerLanes(
       if (state !== 'pending') return;
       let worker: NodeWorker;
       try {
-        worker = new support.Worker(new URL(WORKER_FILE, import.meta.url), {
+        // webpackIgnore: the path is a variable, which webpack would otherwise report as a
+        // critical dependency in every browser build. Workers only run in Node.js.
+        worker = new support.Worker(new URL(/* webpackIgnore: true */ WORKER_FILE, import.meta.url), {
           workerData: {
             direction,
             serverUrl: options.serverUrl,
