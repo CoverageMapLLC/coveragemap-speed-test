@@ -16,17 +16,37 @@ export const SOCKET_CLOSED = 3;
 
 interface TcpSocketOptions {
   binaryPayloads: 'copy' | 'discard';
+  connectTimeoutMs?: number;
 }
 
 interface TcpTransportModule {
   SpeedTransportSocket: new (url: string, options?: TcpSocketOptions) => unknown;
-  probeTcpTransport(host: string, port: number, options?: { secure?: boolean; timeoutMs?: number }): Promise<boolean>;
+}
+
+export interface OpenSocketOptions {
+  /** Raw TCP only: fail if the connection is not open by then. Defaults to the transport's 10 s. */
+  connectTimeoutMs?: number;
 }
 
 // Kept in a variable so browser bundlers never try to resolve the Node-only module.
 const TCP_TRANSPORT_MODULE = '@coveragemap/speed-transport/client';
-/** Covers TCP, TLS, and the preamble round trips on links with several hundred ms of latency. */
-const TCP_PROBE_TIMEOUT_MS = 3000;
+
+/** Protocols assumed for servers that do not report any: they predate the field. */
+export const DEFAULT_SERVER_PROTOCOLS: readonly string[] = ['WSSv1'];
+
+/**
+ * How long the first raw TCP connection of a run may take before the run switches to
+ * WebSocket. Covers TCP, TLS, and the preamble round trips at several hundred ms of latency.
+ */
+export const FIRST_CONNECTION_TIMEOUT_MS = 3000;
+
+/** A socket failed before it opened: refused, unreachable, or not answered in time. */
+export class SocketConnectError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SocketConnectError';
+  }
+}
 
 let tcpTransport: TcpTransportModule | null = null;
 
@@ -59,23 +79,22 @@ export async function loadTcpTransport(): Promise<TcpTransportModule | null> {
  * Opens a test socket. Raw TCP sockets discard large binary payloads: tests only count their
  * bytes, so the client never copies download data.
  */
-export function openSocket(url: string): WebSocket {
+export function openSocket(url: string, options: OpenSocketOptions = {}): WebSocket {
   if (isTcpUrl(url)) {
     if (!tcpTransport) throw new Error('The raw TCP transport is not loaded');
-    return new tcpTransport.SpeedTransportSocket(url, { binaryPayloads: 'discard' }) as WebSocket;
+    return new tcpTransport.SpeedTransportSocket(url, {
+      binaryPayloads: 'discard',
+      ...(options.connectTimeoutMs ? { connectTimeoutMs: options.connectTimeoutMs } : {}),
+    }) as WebSocket;
   }
   return new WebSocket(url);
 }
 
-function getTcpEndpoint(server: SpeedTestServer): { secure: boolean; host: string; port: number } {
-  const secure = server.id !== 'local';
-  return { secure, host: server.domain, port: server.port ?? (secure ? 443 : 80) };
-}
-
 /** Raw TCP URL for a server: the same port as its WebSocket endpoint. */
 export function getServerTcpUrl(server: SpeedTestServer): string {
-  const { secure, host, port } = getTcpEndpoint(server);
-  return `${secure ? 'tcps' : 'tcp'}://${host}:${port}`;
+  const secure = server.id !== 'local';
+  const port = server.port ?? (secure ? 443 : 80);
+  return `${secure ? 'tcps' : 'tcp'}://${server.domain}:${port}`;
 }
 
 export interface ResolvedServerUrl {
@@ -84,32 +103,39 @@ export interface ResolvedServerUrl {
   protocol: 'WSS' | 'TCP';
 }
 
+export interface ServerUrlSelection {
+  /** The URL every stage connects to. */
+  primary: ResolvedServerUrl;
+  /** Where to switch the run if the first connection to `primary` fails, or null. */
+  fallback: ResolvedServerUrl | null;
+}
+
+/** True when the server lists raw TCP: `TCPSv1`, or `TCPv1` for local servers without TLS. */
+export function serverSupportsRawTcp(server: SpeedTestServer): boolean {
+  const protocols = server.protocols ?? DEFAULT_SERVER_PROTOCOLS;
+  return protocols.includes(server.id === 'local' ? 'TCPv1' : 'TCPSv1');
+}
+
 /**
- * Chooses the URL every stage connects to. `auto` uses raw TCP in Node.js when the server
- * answers the raw TCP preamble and the WebSocket otherwise, so servers that predate it keep
- * working. CDN servers only speak WebSocket and are never probed. `tcp` requires raw TCP.
+ * Chooses the URL every stage connects to from the protocols the server reports. `auto` uses
+ * raw TCP in Node.js when the server lists it, with WebSocket as the fallback if the first
+ * connection fails (a network that only passes HTTP, for example), and WebSocket otherwise.
+ * Servers that report no protocols only speak WebSocket. `websocket` and `tcp` force one
+ * transport; `tcp` fails outside Node.js.
  */
-export async function resolveServerUrl(
+export async function selectServerUrl(
   server: SpeedTestServer,
   transport: SpeedTestTransport = 'auto'
-): Promise<ResolvedServerUrl> {
+): Promise<ServerUrlSelection> {
   const webSocket: ResolvedServerUrl = { url: getServerWsUrl(server), protocol: 'WSS' };
-  if (transport === 'websocket') return webSocket;
-  if (transport === 'auto' && server.isCDN) return webSocket;
-
-  const module = await loadTcpTransport();
-  if (!module) {
-    if (transport === 'tcp') throw new Error('The raw TCP transport needs Node.js');
-    return webSocket;
-  }
-
   const tcp: ResolvedServerUrl = { url: getServerTcpUrl(server), protocol: 'TCP' };
-  if (transport === 'tcp') return tcp;
-
-  const { secure, host, port } = getTcpEndpoint(server);
-  const supported = await module.probeTcpTransport(host, port, {
-    secure,
-    timeoutMs: TCP_PROBE_TIMEOUT_MS,
-  });
-  return supported ? tcp : webSocket;
+  if (transport === 'websocket') return { primary: webSocket, fallback: null };
+  if (transport === 'tcp') {
+    if (!(await loadTcpTransport())) throw new Error('The raw TCP transport needs Node.js');
+    return { primary: tcp, fallback: null };
+  }
+  if (!serverSupportsRawTcp(server) || !(await loadTcpTransport())) {
+    return { primary: webSocket, fallback: null };
+  }
+  return { primary: tcp, fallback: webSocket };
 }

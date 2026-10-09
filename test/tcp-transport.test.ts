@@ -1,5 +1,5 @@
 // @vitest-environment node
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { createSpeedTestServer, type SpeedTransportServer } from '@coveragemap/speed-transport';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocketServer } from 'ws';
@@ -11,7 +11,9 @@ import {
   isTcpUrl,
   loadTcpTransport,
   openSocket,
-  resolveServerUrl,
+  selectServerUrl,
+  serverSupportsRawTcp,
+  SocketConnectError,
   SOCKET_OPEN,
 } from '../src/tests/sockets.js';
 import { runUploadEstimationTest } from '../src/tests/upload-estimation-test.js';
@@ -92,26 +94,102 @@ describe('raw TCP URLs', () => {
   });
 });
 
-describe('resolveServerUrl', () => {
-  it('uses raw TCP when the server supports it', async () => {
-    const port = await startTransportServer();
-    expect(await resolveServerUrl(server({ port }))).toEqual({ url: `tcp://127.0.0.1:${port}`, protocol: 'TCP' });
+describe('selectServerUrl', () => {
+  const ALL = ['WSSv1', 'WSv1', 'TCPSv1', 'TCPv1'];
+
+  it('uses raw TCP with a WebSocket fallback when the server lists it', async () => {
+    expect(await selectServerUrl(server({ port: 8080, protocols: ALL }))).toEqual({
+      primary: { url: 'tcp://127.0.0.1:8080', protocol: 'TCP' },
+      fallback: { url: 'ws://127.0.0.1:8080/v1/ws', protocol: 'WSS' },
+    });
+    expect(await selectServerUrl(server({ id: 'abc', domain: 'speed.example.com', port: 443, protocols: ['WSSv1', 'TCPSv1'] }))).toEqual({
+      primary: { url: 'tcps://speed.example.com:443', protocol: 'TCP' },
+      fallback: { url: 'wss://speed.example.com:443/v1/ws', protocol: 'WSS' },
+    });
   });
 
-  it('falls back to WebSocket for servers without raw TCP', async () => {
+  it('uses WebSocket for servers that do not list raw TCP or report no protocols', async () => {
+    for (const protocols of [undefined, ['WSSv1'], ['WSSv1', 'WSv1']]) {
+      expect(await selectServerUrl(server({ port: 8080, protocols }))).toEqual({
+        primary: { url: 'ws://127.0.0.1:8080/v1/ws', protocol: 'WSS' },
+        fallback: null,
+      });
+    }
+  });
+
+  it('needs the variant matching the server: TCPv1 for local servers, TCPSv1 otherwise', () => {
+    expect(serverSupportsRawTcp(server({ protocols: ['TCPv1'] }))).toBe(true);
+    expect(serverSupportsRawTcp(server({ protocols: ['TCPSv1'] }))).toBe(false);
+    expect(serverSupportsRawTcp(server({ id: 'abc', protocols: ['TCPSv1'] }))).toBe(true);
+    expect(serverSupportsRawTcp(server({ id: 'abc', protocols: ['TCPv1'] }))).toBe(false);
+    expect(serverSupportsRawTcp(server({ id: 'abc' }))).toBe(false);
+  });
+
+  it('honors websocket and tcp whatever the server lists', async () => {
+    expect(await selectServerUrl(server({ port: 1, protocols: ALL }), 'websocket')).toEqual({
+      primary: { url: 'ws://127.0.0.1:1/v1/ws', protocol: 'WSS' },
+      fallback: null,
+    });
+    expect(await selectServerUrl(server({ port: 1 }), 'tcp')).toEqual({
+      primary: { url: 'tcp://127.0.0.1:1', protocol: 'TCP' },
+      fallback: null,
+    });
+  });
+
+  it('never connects to the server to choose', async () => {
+    let sessions = 0;
+    const transport = createSpeedTestServer({
+      authorize: () => {
+        sessions++;
+        return true;
+      },
+    });
+    const { port } = await transport.listen(0, '127.0.0.1');
+    cleanups.push(() => transport.close());
+    let accepted = 0;
+    transport.httpServer.on('connection', () => accepted++);
+    await selectServerUrl(server({ port, protocols: ALL }));
+    await selectServerUrl(server({ port }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect([sessions, accepted, transport.connectionCount]).toEqual([0, 0, 0]);
+  });
+});
+
+describe('first connection failures', () => {
+  it('reports a raw TCP connection a server without raw TCP refuses as a connect error', async () => {
     const port = await startWebSocketOnlyServer();
-    expect(await resolveServerUrl(server({ port }))).toEqual({ url: `ws://127.0.0.1:${port}/v1/ws`, protocol: 'WSS' });
+    const failure = runLatencyTest({ serverUrl: `tcp://127.0.0.1:${port}`, pingCount: 3, cancellationToken: new CancellationToken() });
+    await expect(failure).rejects.toBeInstanceOf(SocketConnectError);
   });
 
-  it('never probes CDN servers', async () => {
-    const port = await startTransportServer();
-    const resolved = await resolveServerUrl(server({ port, isCDN: true }));
-    expect(resolved.protocol).toBe('WSS');
+  it('gives up on a raw TCP connection that is never answered after connectTimeoutMs', async () => {
+    const sockets = new Set<net.Socket>();
+    const silent = net.createServer((socket) => sockets.add(socket.on('error', () => {})));
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    cleanups.push(() => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise<void>((resolve) => silent.close(() => resolve()));
+    });
+    const started = Date.now();
+    await expect(
+      runLatencyTest({
+        serverUrl: `tcp://127.0.0.1:${(silent.address() as AddressInfo).port}`,
+        pingCount: 3,
+        connectTimeoutMs: 300,
+        cancellationToken: new CancellationToken(),
+      })
+    ).rejects.toBeInstanceOf(SocketConnectError);
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 
-  it('honors websocket and tcp without probing', async () => {
-    expect((await resolveServerUrl(server({ port: 1 }), 'websocket')).protocol).toBe('WSS');
-    expect(await resolveServerUrl(server({ port: 1 }), 'tcp')).toEqual({ url: 'tcp://127.0.0.1:1', protocol: 'TCP' });
+  it('reports a refused connection as a connect error', async () => {
+    const probe = net.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise((resolve) => probe.close(resolve));
+    await expect(
+      runLatencyTest({ serverUrl: `tcp://127.0.0.1:${port}`, pingCount: 3, cancellationToken: new CancellationToken() })
+    ).rejects.toBeInstanceOf(SocketConnectError);
   });
 });
 

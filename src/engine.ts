@@ -52,7 +52,7 @@ import {
   type ResolvedSpeedTestNetwork,
 } from './utils/network-provider.js';
 import { runLatencyTest } from './tests/latency-test.js';
-import { resolveServerUrl } from './tests/sockets.js';
+import { FIRST_CONNECTION_TIMEOUT_MS, SocketConnectError, selectServerUrl } from './tests/sockets.js';
 import { runDownloadEstimationTest } from './tests/download-estimation-test.js';
 import { runUploadEstimationTest } from './tests/upload-estimation-test.js';
 import { runDownloadSpeedTest } from './tests/download-speed-test.js';
@@ -222,8 +222,30 @@ export class SpeedTestEngine {
       } else if (!targetServer) {
         targetServer = await this.selectBestServer();
       }
-      const { url: serverUrl, protocol } = await resolveServerUrl(targetServer, this.config.transport);
-      testProtocol = protocol;
+      const selection = await selectServerUrl(targetServer, this.config.transport);
+      let serverUrl = selection.primary.url;
+      testProtocol = selection.primary.protocol;
+      let fallback = selection.fallback;
+      const cancellationToken = this.cancellationToken;
+
+      /**
+       * Runs the first stage that connects. If its raw TCP socket cannot open within
+       * FIRST_CONNECTION_TIMEOUT_MS (refused, or a network that only passes HTTP), the rest of
+       * the run switches to the fallback and the stage runs again there.
+       */
+      const firstConnection = async <T>(run: (url: string, connectTimeoutMs?: number) => Promise<T>): Promise<T> => {
+        const switchTo = fallback;
+        fallback = null;
+        if (!switchTo) return run(serverUrl);
+        try {
+          return await run(serverUrl, FIRST_CONNECTION_TIMEOUT_MS);
+        } catch (error) {
+          if (!(error instanceof SocketConnectError)) throw error;
+          serverUrl = switchTo.url;
+          testProtocol = switchTo.protocol;
+          return run(serverUrl);
+        }
+      };
 
       const buildStage = async (testStage: string): Promise<NetworkTestResultStage> => {
         if (this.locationProvider) {
@@ -249,20 +271,26 @@ export class SpeedTestEngine {
         if (this.tests.latency) {
           this.setStage('latency');
           stages.push(await buildStage('latencyStart'));
-          latencyData = await runLatencyTest({
-            serverUrl,
-            pingCount: this.config.pingCount,
-            timeoutMs: this.config.latencyTimeoutMs,
-            cancellationToken: this.cancellationToken,
-            onPing: (latencyMs, index) => this.callbacks.onLatencyPing?.(latencyMs, index),
-          });
+          latencyData = await firstConnection((url, connectTimeoutMs) =>
+            runLatencyTest({
+              serverUrl: url,
+              pingCount: this.config.pingCount,
+              timeoutMs: this.config.latencyTimeoutMs,
+              connectTimeoutMs,
+              cancellationToken,
+              onPing: (latencyMs, index) => this.callbacks.onLatencyPing?.(latencyMs, index),
+            })
+          );
           this.callbacks.onLatencyResult?.(latencyData);
         } else if (this.tests.download || this.tests.upload) {
-          latencyData = await runLatencyTest({
-            serverUrl,
-            pingCount: 1,
-            cancellationToken: this.cancellationToken,
-          });
+          latencyData = await firstConnection((url, connectTimeoutMs) =>
+            runLatencyTest({
+              serverUrl: url,
+              pingCount: 1,
+              connectTimeoutMs,
+              cancellationToken,
+            })
+          );
         }
 
         const latencyMs = latencyData?.minLatency ?? 0;

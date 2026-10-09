@@ -157,6 +157,7 @@ interface SpeedTestServer {
   distance: number | null; // kilometers from client
   isCDN: boolean | null;
   selfHosted?: boolean; // true only for self-hosted servers entered manually; never present in this list
+  protocols?: string[]; // transports and protocol versions, e.g. ["WSSv1", "WSv1", "TCPSv1", "TCPv1"]; absent means ["WSSv1"]
 }
 ```
 
@@ -200,16 +201,17 @@ The WebSocket `binaryType` is always set to `"arraybuffer"` so binary frames are
 
 ### Raw TCP Transport
 
-In Node.js, with `config.transport` set to `auto` (the default), the engine first checks whether the server also offers raw TCP on the same port. Servers built on [`@coveragemap/speed-transport`](https://github.com/CoverageMapLLC/speed-transport) do:
+Servers report the transports they accept in `protocols`: `WSSv1` (secure WebSocket), `WSv1` (WebSocket), `TCPSv1` (raw TCP over TLS), and `TCPv1` (raw TCP), each with the speed test protocol version on it. Servers that report nothing predate the field and are treated as `["WSSv1"]`, and so is the Cloudflare CDN server.
+
+In Node.js, with `config.transport` set to `auto` (the default), the engine runs over raw TCP when the server lists `TCPSv1` (`TCPv1` for servers with `id === "local"`), on the same port as WebSocket. Servers built on [`@coveragemap/speed-transport`](https://github.com/CoverageMapLLC/speed-transport) offer it:
 
 ```
 tcps://<server.domain>:<server.port>     (tcp:// for servers with id === "local")
 ```
 
-The client opens a TLS connection and sends the 7 byte preamble `STCP/1
-`; the server echoes it. After that both sides exchange RFC 6455 frames without masking and without an HTTP handshake. Every command (`PING`, `START`, `CLOSE`, `ACK`, `PONG`) and every stage below is identical to WebSocket.
+The client opens a TLS connection and sends the 7 byte preamble `STCP/1\n`; the server echoes it. After that both sides exchange RFC 6455 frames without masking and without an HTTP handshake. Every command (`PING`, `START`, `CLOSE`, `ACK`, `PONG`) and every stage below is identical to WebSocket.
 
-If the preamble is not echoed within 3 seconds, or the server answers with anything else (an HTTP 400 from an older server, for example), the run uses WebSocket. CDN servers (`isCDN: true`) are never probed. The probe connection is closed before the first stage.
+The engine does not check for raw TCP before the run. Instead, the first stage's connection over raw TCP gets 3 seconds to open (TCP, TLS, and the preamble echo). If it is refused or not answered in time, for example on a network that only passes HTTP through a proxy, the engine repeats that stage over WebSocket and runs the rest of the test there. Failures after a connection opened do not switch transports. `transport: 'websocket'` and `transport: 'tcp'` skip all of this and use one transport.
 
 Raw TCP saves the client the WebSocket mask on every uploaded byte and lets it count downloaded frames without copying them. On loopback with TLS it measured 16.8/14.8 Gbps against 11.5/13.9 Gbps for WebSocket, with 37% less client CPU on upload. Browsers cannot open raw TCP connections and always use WebSocket. Results record the transport in `testType.testProtocol` (`TCP` or `WSS`).
 
