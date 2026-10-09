@@ -36,7 +36,11 @@ export type ThroughputDirection = 'download' | 'upload';
 const DOWNLOAD_ITERATION_COUNT = 500;
 const MAX_DOWNLOAD_MESSAGE_SIZE_KB = 5 * 1024;
 const MAX_UPLOAD_CHUNK_SIZE = 1024 * 1024;
-const UPLOAD_BURST_INTERVAL_MS = 5;
+const UPLOAD_REFILL_INTERVAL_MS = 5;
+/** Longest a timer refill may spend sending before yielding to other work. */
+const UPLOAD_REFILL_BUDGET_MS = 4;
+/** 64 MB with 1 MB chunks: 1.7 Gbps per socket at 300 ms round trip time. */
+const MAX_UNACKED_UPLOAD_CHUNKS = 64;
 
 function closeSockets(sockets: WebSocket[]): void {
   for (const socket of sockets) {
@@ -153,8 +157,17 @@ export function openDownloadLane(
 }
 
 /**
- * Upload lane. Every 5 ms each socket below its buffer threshold is sent one message, split
- * into chunks of at most 1 MB. Bytes count once the server acknowledges the chunk.
+ * Upload lane. Each socket's send buffer is kept topped up to a target size, after
+ * acknowledgements arrive and on a short timer as a fallback since the WebSocket API has no
+ * drain event. Every socket reuses one preallocated chunk of at most 1 MB. Bytes count once
+ * the server acknowledges the chunk.
+ *
+ * Unacknowledged chunks per socket are capped as well, so memory stays bounded with
+ * WebSocket implementations that do not report `bufferedAmount`. The cap is large enough
+ * to cover the bandwidth-delay product of multi-gigabit links with 300 ms of latency.
+ * A refill stops after a few milliseconds of work, and acknowledgements that arrive
+ * together share one refill, so a CPU bound client still services snapshots and latency
+ * probes on time.
  */
 export function openUploadLane(
   options: ThroughputLaneOptions,
@@ -162,68 +175,102 @@ export function openUploadLane(
 ): ThroughputLane {
   let bytes = 0;
   let closed = false;
-  let uploadTimer: ReturnType<typeof setInterval> | null = null;
-  const bufferSizeKb = Math.max(options.messageSizeKb * 32, 1024);
-  const messageBytes = options.messageSizeKb * 1024;
-  const pendingBytesBySocket = new Map<WebSocket, number[]>();
+  let started = false;
+  let refillTimer: ReturnType<typeof setInterval> | null = null;
+  const chunkBytes = Math.min(options.messageSizeKb * 1024, MAX_UPLOAD_CHUNK_SIZE);
+  const chunk = new Uint8Array(chunkBytes);
+  const bufferTargetBytes = getUploadBufferTargetBytes(chunkBytes);
+  const chunksPerFill = Math.ceil(bufferTargetBytes / chunkBytes);
+  const unackedChunksBySocket = new Map<WebSocket, number>();
 
-  const createChunks = (): Uint8Array[] => {
-    const chunks: Uint8Array[] = [];
-    const fullChunks = Math.floor(messageBytes / MAX_UPLOAD_CHUNK_SIZE);
-    const remainder = messageBytes % MAX_UPLOAD_CHUNK_SIZE;
-    for (let i = 0; i < fullChunks; i++) {
-      chunks.push(new Uint8Array(MAX_UPLOAD_CHUNK_SIZE));
+  /** Sends up to `maxChunks` chunks. Returns false once `deadline` has passed. */
+  const fill = (socket: WebSocket, maxChunks: number, deadline = Infinity): boolean => {
+    if (closed || !started || socket.readyState !== WebSocket.OPEN) return true;
+    let unacked = unackedChunksBySocket.get(socket) ?? 0;
+    let withinBudget = true;
+    try {
+      for (
+        let sent = 0;
+        sent < maxChunks &&
+        unacked < MAX_UNACKED_UPLOAD_CHUNKS &&
+        socket.bufferedAmount < bufferTargetBytes;
+        sent++
+      ) {
+        socket.send(chunk);
+        unacked++;
+        if (performance.now() > deadline) {
+          withinBudget = false;
+          break;
+        }
+      }
+    } catch {
+      // ignore send errors; the socket is closing
     }
-    if (remainder > 0) {
-      chunks.push(new Uint8Array(remainder));
-    }
-    return chunks;
+    unackedChunksBySocket.set(socket, unacked);
+    return withinBudget;
   };
 
   const sockets = connectLane('upload', options, callbacks, () => closed, (socket) => {
-    pendingBytesBySocket.set(socket, []);
+    unackedChunksBySocket.set(socket, 0);
     socket.onmessage = (event) => {
       if (typeof event.data !== 'string' || event.data !== 'ACK') return;
-      const acknowledgedChunkSize = pendingBytesBySocket.get(socket)?.shift();
-      if (acknowledgedChunkSize === undefined) return;
-      bytes += acknowledgedChunkSize;
+      const unacked = unackedChunksBySocket.get(socket) ?? 0;
+      if (unacked === 0) return;
+      unackedChunksBySocket.set(socket, unacked - 1);
+      bytes += chunkBytes;
       callbacks.onBytes?.(bytes);
+      scheduleRefill();
     };
   });
 
-  const sendBurst = () => {
-    if (closed) return;
-    const chunks = createChunks();
-    for (const socket of sockets) {
-      if (socket.readyState !== WebSocket.OPEN) continue;
-      if (socket.bufferedAmount > bufferSizeKb * 1024) continue;
-      const pendingBytes = pendingBytesBySocket.get(socket);
-      for (const chunk of chunks) {
-        try {
-          socket.send(chunk);
-          pendingBytes?.push(chunk.byteLength);
-        } catch {
-          // ignore send errors during burst
-        }
+  let refillScheduled = false;
+  const scheduleRefill = () => {
+    if (refillScheduled) return;
+    refillScheduled = true;
+    queueMicrotask(() => {
+      refillScheduled = false;
+      fillAll();
+    });
+  };
+
+  let nextSocket = 0;
+  const fillAll = () => {
+    const deadline = performance.now() + UPLOAD_REFILL_BUDGET_MS;
+    for (let i = 0; i < sockets.length; i++) {
+      const socket = sockets[(nextSocket + i) % sockets.length];
+      if (!fill(socket, chunksPerFill, deadline)) {
+        // Resume with the next socket on the following tick.
+        nextSocket = (nextSocket + i + 1) % sockets.length;
+        return;
       }
     }
   };
 
   return {
     start() {
-      uploadTimer = setInterval(sendBurst, UPLOAD_BURST_INTERVAL_MS);
-      sendBurst();
+      started = true;
+      refillTimer = setInterval(fillAll, UPLOAD_REFILL_INTERVAL_MS);
+      fillAll();
     },
     close() {
       closed = true;
-      if (uploadTimer) clearInterval(uploadTimer);
-      uploadTimer = null;
+      if (refillTimer) clearInterval(refillTimer);
+      refillTimer = null;
       closeSockets(sockets);
     },
     get bytes() {
       return bytes;
     },
   };
+}
+
+/**
+ * Bytes to keep queued per upload socket: two chunks, at least 16 KB. The kernel's socket
+ * buffer holds more, so a shallow queue keeps the link busy while limiting memory and the
+ * work a single threaded client does per refill.
+ */
+export function getUploadBufferTargetBytes(chunkBytes: number): number {
+  return Math.max(chunkBytes * 2, 16 * 1024);
 }
 
 export function openThroughputLane(
