@@ -212,10 +212,13 @@ interface SpeedTestServer {
   distance: number | null;
   isCDN: boolean | null;
   selfHosted?: boolean;
+  protocols?: string[];
 }
 ```
 
 `selfHosted` is `true` when the test ran against a self-hosted server that the user entered manually. CoverageMap stores those results but never maps them.
+
+`protocols` lists the transports the server reported, each with the speed test protocol version on it: `WSSv1`, `WSv1`, `TCPSv1`, `TCPv1`. It is absent for servers that predate the field, which only support `WSSv1`. The transport the test actually used is `testType.testProtocol`.
 
 ### `results.location`
 
