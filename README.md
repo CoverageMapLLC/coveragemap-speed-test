@@ -106,6 +106,7 @@ const engine = new SpeedTestEngine({
 | `config.snapshotIntervalMs` | 50–5000 | `100` | How often progress snapshots are emitted (ms) |
 | `config.latencyTimeoutMs` | 3000–30000 | `10000` | Latency phase timeout (ms) |
 | `config.estimationTimeoutMs` | 3000–30000 | `15000` | Estimation phase timeout (ms) |
+| `config.throughputThreads` | 0–64 | `0` | Node.js worker threads for multi-gigabit stages (`0` = automatic, `1` = calling thread only) |
 
 **Providers** — set after construction or at the module level:
 

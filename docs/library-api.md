@@ -358,6 +358,7 @@ interface SpeedTestConfig {
   snapshotIntervalMs: number;
   latencyTimeoutMs: number;
   estimationTimeoutMs: number;
+  throughputThreads?: number;
 }
 ```
 
@@ -369,6 +370,7 @@ interface SpeedTestConfig {
 | `snapshotIntervalMs` | `number` | `100` | 50 – 5000 | Interval between progress snapshots emitted during sustained throughput stages. Lower values increase callback frequency. |
 | `latencyTimeoutMs` | `number` | `10000` | 3000 – 30000 | Maximum time allowed for the latency stage to collect sufficient probe responses. The stage fails if this window is exceeded. |
 | `estimationTimeoutMs` | `number` | `15000` | 3000 – 30000 | Maximum time allowed for download and upload estimation phases. Prevents the run from hanging during pre-throughput sizing. |
+| `throughputThreads` | `number` | `0` | 0 – 64 | Threads the download and upload stages spread their sockets across when the estimate is 1 Gbps or more. `0` picks automatically (6), `1` keeps every socket on the calling thread. Extra threads are Node.js worker threads, used only with Node's built-in `WebSocket` and never more than half the CPU cores; browsers ignore it. |
 
 ---
 

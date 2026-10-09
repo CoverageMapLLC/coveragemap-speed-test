@@ -2,8 +2,19 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Multi-gigabit throughput in Node.js**: Download and upload stages estimated at 1 Gbps or more open 12 sockets (was 10) and, with Node's built-in WebSocket, spread them over 6 worker threads that report bytes through a `SharedArrayBuffer`. Against `@coveragemap/speed-test-server` on loopback this measures 11 Gbps each way over TLS and 15/13 Gbps without TLS (was 4.4/3.4 and 6.3/4.1). Applications that install a WebSocket polyfill keep every socket on the calling thread. The protocol is unchanged.
+- **Continuous upload**: Each upload socket keeps two chunks queued and refills after acknowledgements instead of sending one message every 5 ms, reusing one preallocated chunk. Unacknowledged chunks are capped per socket and refills are time boxed so progress stays real time on busy clients.
+- **Slow links**: Download sockets send `CLOSE` when the stage ends, so leftover download frames no longer starve the upload stage. On 100 kbps to 1 Mbps links upload went from 0 to 7 kbps (or a timeout) to 95 to 99% of the link.
+
+### Bug Fixes
+
+- A throughput stage now fails when one of its sockets cannot connect. Previously the stage waited forever.
+
 ### New Features
 
+- **`config.throughputThreads`**: Threads for multi-gigabit stages. `0` (default) picks automatically, `1` disables worker threads.
 - **`selfHosted` on `SpeedTestServer`**: New optional boolean, set to `true` by self-hosted `@coveragemap/speed-test-server` instances in their `GET /v1/server` response. Pass that object to `engine.run(server)` to test against a self-hosted server. The flag travels through `results.server` untouched so CoverageMap can store the result without mapping it. No engine changes were needed: `wss://` is already used for every server whose `id` is not `local`.
 
 ## 0.4.0
