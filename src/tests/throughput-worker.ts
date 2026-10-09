@@ -3,5 +3,5 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { hostWorkerLane, type LanePort, type WorkerLaneData } from './worker-lanes.js';
 
 if (parentPort) {
-  hostWorkerLane(parentPort as unknown as LanePort, workerData as WorkerLaneData);
+  void hostWorkerLane(parentPort as unknown as LanePort, workerData as WorkerLaneData);
 }

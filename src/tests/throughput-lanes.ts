@@ -1,9 +1,11 @@
 /**
  * A lane is a group of throughput sockets that generate traffic and count bytes. Lanes only
- * use the standard WebSocket API, so the same code runs on the calling thread or inside a
- * worker thread. The throughput runners own timing, snapshots, and results; lanes only move
+ * use the WebSocket API (raw TCP sockets from `openSocket` share it), so the same code runs
+ * on the calling thread or inside a worker thread. The throughput runners own timing, snapshots, and results; lanes only move
  * bytes.
  */
+
+import { SOCKET_CLOSED, SOCKET_OPEN, openSocket } from './sockets.js';
 
 export interface ThroughputLaneOptions {
   serverUrl: string;
@@ -51,8 +53,8 @@ const MAX_UNACKED_UPLOAD_CHUNKS = 64;
 function closeSockets(sockets: WebSocket[], abortServerStream = false): void {
   for (const socket of sockets) {
     try {
-      if (abortServerStream && socket.readyState === WebSocket.OPEN) socket.send('CLOSE');
-      if (socket.readyState !== WebSocket.CLOSED) socket.close();
+      if (abortServerStream && socket.readyState === SOCKET_OPEN) socket.send('CLOSE');
+      if (socket.readyState !== SOCKET_CLOSED) socket.close();
     } catch {
       // ignore
     }
@@ -77,7 +79,7 @@ function connectLane(
     const index = firstIndex + i;
     let socket: WebSocket;
     try {
-      socket = new WebSocket(options.serverUrl);
+      socket = openSocket(options.serverUrl);
     } catch (error) {
       closeSockets(sockets);
       throw new Error(`Failed to create ${direction} WebSocket ${index}: ${error}`);
@@ -123,7 +125,7 @@ export function openDownloadLane(
   const messageSizeKbBySocket = new Map<WebSocket, number>();
 
   const sendDownloadRequest = (socket: WebSocket, requestMessageSizeKb: number) => {
-    if (closed || socket.readyState !== WebSocket.OPEN) return;
+    if (closed || socket.readyState !== SOCKET_OPEN) return;
     socket.send(`START ${requestMessageSizeKb} ${DOWNLOAD_ITERATION_COUNT}`);
     packetsRemainingBySocket.set(socket, DOWNLOAD_ITERATION_COUNT);
     messageSizeKbBySocket.set(socket, requestMessageSizeKb);
@@ -192,7 +194,7 @@ export function openUploadLane(
 
   /** Sends up to `maxChunks` chunks. Returns false once `deadline` has passed. */
   const fill = (socket: WebSocket, maxChunks: number, deadline = Infinity): boolean => {
-    if (closed || !started || socket.readyState !== WebSocket.OPEN) return true;
+    if (closed || !started || socket.readyState !== SOCKET_OPEN) return true;
     let unacked = unackedChunksBySocket.get(socket) ?? 0;
     let withinBudget = true;
     try {

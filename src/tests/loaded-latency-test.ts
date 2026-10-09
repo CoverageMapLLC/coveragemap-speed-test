@@ -2,6 +2,7 @@ import type { LatencyTestData } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { roundTo3Decimals } from '../utils/speed.js';
 import { computeLatencyData } from './latency-test.js';
+import { SOCKET_CLOSED, SOCKET_OPEN, openSocket } from './sockets.js';
 
 const DEFAULT_PING_INTERVAL_MS = 1000;
 const STOP_GRACE_MS = 100;
@@ -38,7 +39,7 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
     if (stopGraceTimer) clearTimeout(stopGraceTimer);
     stopGraceTimer = null;
     try {
-      if (socket && socket.readyState !== WebSocket.CLOSED) {
+      if (socket && socket.readyState !== SOCKET_CLOSED) {
         socket.close();
       }
     } catch {
@@ -77,7 +78,7 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
 
   const sendPing = () => {
     if (isStopped || !isRunning || cancellationToken.isCancelled) return;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (!socket || socket.readyState !== SOCKET_OPEN) return;
 
     try {
       socket.send('PING');
@@ -103,7 +104,7 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
       isRunning = true;
 
       try {
-        socket = new WebSocket(serverUrl);
+        socket = openSocket(serverUrl);
         socket.binaryType = 'arraybuffer';
       } catch (error) {
         isStopped = true;
@@ -167,7 +168,7 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
 
         stopGraceTimer = setTimeout(() => {
           try {
-            if (socket && socket.readyState !== WebSocket.CLOSED) {
+            if (socket && socket.readyState !== SOCKET_CLOSED) {
               socket.close();
             } else {
               completeStop();

@@ -359,6 +359,7 @@ interface SpeedTestConfig {
   latencyTimeoutMs: number;
   estimationTimeoutMs: number;
   throughputThreads?: number;
+  transport?: 'auto' | 'websocket' | 'tcp';
 }
 ```
 
@@ -370,7 +371,8 @@ interface SpeedTestConfig {
 | `snapshotIntervalMs` | `number` | `100` | 50 – 5000 | Interval between progress snapshots emitted during sustained throughput stages. Lower values increase callback frequency. |
 | `latencyTimeoutMs` | `number` | `10000` | 3000 – 30000 | Maximum time allowed for the latency stage to collect sufficient probe responses. The stage fails if this window is exceeded. |
 | `estimationTimeoutMs` | `number` | `15000` | 3000 – 30000 | Maximum time allowed for download and upload estimation phases. Prevents the run from hanging during pre-throughput sizing. |
-| `throughputThreads` | `number` | `0` | 0 – 64 | Threads the download and upload stages spread their sockets across when the estimate is 1 Gbps or more. `0` picks automatically (6), `1` keeps every socket on the calling thread. Extra threads are Node.js worker threads, used only with Node's built-in `WebSocket` and never more than half the CPU cores; browsers ignore it. |
+| `throughputThreads` | `number` | `0` | 0 – 64 | Threads the download and upload stages spread their sockets across when the estimate is 1 Gbps or more. `0` picks automatically (6), `1` keeps every socket on the calling thread. Extra threads are Node.js worker threads, used only with Node's built-in `WebSocket` (or raw TCP) and never more than half the CPU cores; browsers ignore it. |
+| `transport` | `string` | `'auto'` | `auto`, `websocket`, `tcp` | How sockets connect. `auto` probes the server once per run in Node.js and uses [raw TCP](./protocol.md#raw-tcp-transport) when it answers, WebSocket otherwise. CDN servers are never probed. Raw TCP needs far less client CPU at multi-gigabit speeds. `websocket` always uses WebSocket. `tcp` always uses raw TCP and fails in browsers. |
 
 ---
 
@@ -1087,7 +1089,7 @@ interface NetworkTestResultTestType {
 | `sessionId` | `string` | Session identifier grouping related runs. |
 | `type` | `TestTypeSingleMultiple` | Whether this is a single or multi-connection test. |
 | `tag` | `LocationTag` | Location context tag. |
-| `testProtocol` | `string` | Protocol used (e.g. `'websocket'`). |
+| `testProtocol` | `string` | Transport used: `'WSS'` for WebSocket, `'TCP'` for raw TCP. |
 | `testIndex` | `number \| null` | Index within a sequence of runs. |
 | `testCount` | `number \| null` | Total number of runs in the sequence. |
 | `downloadDurationMs` | `number \| null` | Configured download duration. |

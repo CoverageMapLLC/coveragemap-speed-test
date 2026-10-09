@@ -56,7 +56,7 @@ Each phase is designed to be cancellable, resilient to transient failures, and p
 | Parallel throughput saturation | Multi-socket concurrency (1–12 sockets) derived from estimation, spread across worker threads in Node.js for multi-gigabit stages |
 | Backpressure safety on upload | Keep `bufferedAmount` at two chunks and cap unacknowledged chunks per socket |
 | Deterministic promise lifecycle | Every stage settles its promise exactly once |
-| Browser and Node.js parity | Uses `globalThis.WebSocket` and `fetch`; no environment-specific code in runners |
+| Browser and Node.js parity | Runners only use the WebSocket API and `fetch`; in Node.js the same API can be backed by raw TCP |
 | Graceful failure | Every stage records `failedReason` and `failedStage`; results upload even on partial runs |
 
 ---
@@ -197,6 +197,21 @@ wss://<server.domain>:<server.port>/v1/ws
 Exception: servers with `id === "local"` use `ws://` (unencrypted) instead of `wss://`. All remote production servers use `wss://`.
 
 The WebSocket `binaryType` is always set to `"arraybuffer"` so binary frames are delivered as `ArrayBuffer` objects.
+
+### Raw TCP Transport
+
+In Node.js, with `config.transport` set to `auto` (the default), the engine first checks whether the server also offers raw TCP on the same port. Servers built on [`@coveragemap/speed-transport`](https://github.com/CoverageMapLLC/speed-transport) do:
+
+```
+tcps://<server.domain>:<server.port>     (tcp:// for servers with id === "local")
+```
+
+The client opens a TLS connection and sends the 7 byte preamble `STCP/1
+`; the server echoes it. After that both sides exchange RFC 6455 frames without masking and without an HTTP handshake. Every command (`PING`, `START`, `CLOSE`, `ACK`, `PONG`) and every stage below is identical to WebSocket.
+
+If the preamble is not echoed within 3 seconds, or the server answers with anything else (an HTTP 400 from an older server, for example), the run uses WebSocket. CDN servers (`isCDN: true`) are never probed. The probe connection is closed before the first stage.
+
+Raw TCP saves the client the WebSocket mask on every uploaded byte and lets it count downloaded frames without copying them. On loopback with TLS it measured 16.8/14.8 Gbps against 11.5/13.9 Gbps for WebSocket, with 37% less client CPU on upload. Browsers cannot open raw TCP connections and always use WebSocket. Results record the transport in `testType.testProtocol` (`TCP` or `WSS`).
 
 ### Stage Sequence
 
@@ -410,7 +425,7 @@ When the stage ends, each download socket sends the text command `CLOSE` before 
 
 #### Threads
 
-A single JavaScript thread cannot receive or send much more than about 5 Gbps over TLS. When the estimate is 1 Gbps or more (the single socket estimate tops out at a few Gbps however fast the link is), Node.js spreads the sockets across worker threads: 6 by default (`config.throughputThreads`), two sockets each, and never more than half the CPU cores. Each worker runs the same standard WebSocket code and publishes its byte count through a `SharedArrayBuffer`, so the main thread's snapshots stay real time. Worker threads are only used when their built-in `WebSocket` is the same implementation as the application's, so an application that installs a polyfill such as `ws` keeps every socket on the calling thread. Browsers always use the calling thread.
+A single JavaScript thread cannot receive or send much more than about 5 Gbps over TLS. When the estimate is 1 Gbps or more (the single socket estimate tops out at a few Gbps however fast the link is), Node.js spreads the sockets across worker threads: 6 by default (`config.throughputThreads`), two sockets each, and never more than half the CPU cores. Each worker runs the same standard WebSocket code and publishes its byte count through a `SharedArrayBuffer`, so the main thread's snapshots stay real time. Worker threads are only used when their built-in `WebSocket` is the same implementation as the application's, so an application that installs a polyfill such as `ws` keeps every socket on the calling thread. Raw TCP lanes always use worker threads, since they do not depend on the global `WebSocket`. Browsers always use the calling thread.
 
 #### Measurement Model
 

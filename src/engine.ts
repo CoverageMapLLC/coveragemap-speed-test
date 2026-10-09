@@ -31,7 +31,6 @@ import {
   getUploadConnectionCount,
   getThroughputThreadCount,
 } from './types/speed-test.js';
-import { getServerWsUrl } from './types/speed-server.js';
 import { CancellationToken, CancellationError } from './utils/cancellation.js';
 import {
   DOCUMENTED_DEMO_APPLICATION_UUID,
@@ -53,6 +52,7 @@ import {
   type ResolvedSpeedTestNetwork,
 } from './utils/network-provider.js';
 import { runLatencyTest } from './tests/latency-test.js';
+import { resolveServerUrl } from './tests/sockets.js';
 import { runDownloadEstimationTest } from './tests/download-estimation-test.js';
 import { runUploadEstimationTest } from './tests/upload-estimation-test.js';
 import { runDownloadSpeedTest } from './tests/download-speed-test.js';
@@ -205,6 +205,7 @@ export class SpeedTestEngine {
     let failedReason: string | null = null;
     let failedStage: string | null = null;
     let wasCancelled = false;
+    let testProtocol = 'WSS';
 
     let connectionInfo: ConnectionInfo | null = null;
     let location: NetworkTestResultLocation | null = null;
@@ -221,7 +222,8 @@ export class SpeedTestEngine {
       } else if (!targetServer) {
         targetServer = await this.selectBestServer();
       }
-      const serverUrl = getServerWsUrl(targetServer);
+      const { url: serverUrl, protocol } = await resolveServerUrl(targetServer, this.config.transport);
+      testProtocol = protocol;
 
       const buildStage = async (testStage: string): Promise<NetworkTestResultStage> => {
         if (this.locationProvider) {
@@ -366,6 +368,7 @@ export class SpeedTestEngine {
         downloadMessageSizeKb,
         uploadConnectionCount,
         uploadMessageSizeKb,
+        testProtocol,
         stages,
         failedReason,
         failedStage,
@@ -474,6 +477,7 @@ export class SpeedTestEngine {
     downloadMessageSizeKb: number | null;
     uploadConnectionCount: number | null;
     uploadMessageSizeKb: number | null;
+    testProtocol: string;
     stages: NetworkTestResultStage[];
     failedReason: string | null;
     failedStage: string | null;
@@ -547,7 +551,7 @@ export class SpeedTestEngine {
         testsRun: params.testsRun,
         downloadTestDuration: params.testsRun.download ? this.config.downloadDurationMs : null,
         uploadTestDuration: params.testsRun.upload ? this.config.uploadDurationMs : null,
-        testProtocol: 'WSS',
+        testProtocol: params.testProtocol,
         downloadConnectionCount: params.downloadConnectionCount,
         uploadConnectionCount: params.uploadConnectionCount,
         downloadPacketSize: params.downloadMessageSizeKb,
@@ -642,7 +646,7 @@ function normalizeAndValidateApplicationInfo(
 function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): SpeedTestConfig {
   const config = { ...DEFAULT_CONFIG, ...overrides };
 
-  const rules: Array<[keyof SpeedTestConfig, number, number]> = [
+  const rules: Array<[Exclude<keyof SpeedTestConfig, 'transport'>, number, number]> = [
     ['pingCount', 5, 50],
     ['downloadDurationMs', 3000, 30000],
     ['uploadDurationMs', 3000, 30000],
@@ -651,6 +655,10 @@ function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): Speed
     ['estimationTimeoutMs', 3000, 30000],
     ['throughputThreads', 0, 64],
   ];
+
+  if (!['auto', 'websocket', 'tcp'].includes(config.transport ?? 'auto')) {
+    throw new Error("SpeedTestEngineOptions.config.transport must be 'auto', 'websocket', or 'tcp'");
+  }
 
   for (const [field, min, max] of rules) {
     const value = config[field] ?? DEFAULT_CONFIG[field] ?? 0;

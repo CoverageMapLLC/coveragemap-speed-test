@@ -56,7 +56,16 @@ export interface SpeedTestConfig {
    * built-in WebSocket.
    */
   throughputThreads?: number;
+  /**
+   * How sockets connect to the server. `auto` (the default) uses raw TCP in Node.js when the
+   * server supports it, which needs far less client CPU at multi-gigabit speeds, and
+   * WebSocket otherwise. `websocket` always uses WebSocket. `tcp` always uses raw TCP and
+   * fails outside Node.js or against servers without it.
+   */
+  transport?: SpeedTestTransport;
 }
+
+export type SpeedTestTransport = 'auto' | 'websocket' | 'tcp';
 
 export interface SpeedTestSelection {
   latency?: boolean;
@@ -72,6 +81,7 @@ export const DEFAULT_CONFIG: SpeedTestConfig = {
   latencyTimeoutMs: 10000,
   estimationTimeoutMs: 15000,
   throughputThreads: 0,
+  transport: 'auto',
 };
 
 export interface SpeedTestCallbacks {

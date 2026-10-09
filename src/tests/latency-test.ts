@@ -1,6 +1,7 @@
 import type { LatencyTestData } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { roundTo3Decimals } from '../utils/speed.js';
+import { SOCKET_CLOSED, openSocket } from './sockets.js';
 
 export interface LatencyTestOptions {
   serverUrl: string;
@@ -24,7 +25,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
       try {
-        if (socket && socket.readyState !== WebSocket.CLOSED) {
+        if (socket && socket.readyState !== SOCKET_CLOSED) {
           socket.close();
         }
       } catch {
@@ -76,7 +77,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
     }, timeoutMs);
 
     try {
-      socket = new WebSocket(serverUrl);
+      socket = openSocket(serverUrl);
       socket.binaryType = 'arraybuffer';
     } catch (error) {
       cleanup();

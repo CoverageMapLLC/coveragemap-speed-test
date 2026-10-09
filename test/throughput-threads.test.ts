@@ -3,12 +3,12 @@ import { runDownloadSpeedTest } from '../src/tests/download-speed-test.js';
 import {
   getWebSocketSource,
   hostWorkerLane,
-  isNodeRuntime,
   openWorkerLanes,
   splitConnections,
   type HostToWorkerMessage,
   type WorkerToHostMessage,
 } from '../src/tests/worker-lanes.js';
+import { isNodeRuntime } from '../src/tests/sockets.js';
 import { getThroughputThreadCount } from '../src/types/speed-test.js';
 import { CancellationToken } from '../src/utils/cancellation.js';
 
