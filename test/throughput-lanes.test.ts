@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getUploadBufferTargetBytes, openUploadLane } from '../src/tests/throughput-lanes.js';
+import {
+  getUploadBufferTargetBytes,
+  openDownloadLane,
+  openUploadLane,
+} from '../src/tests/throughput-lanes.js';
 
 /** Upload socket whose `bufferedAmount` grows by every send until `drain()` is called. */
 class UploadSocketMock {
@@ -15,6 +19,7 @@ class UploadSocketMock {
   bufferedAmount = 0;
   binaryType = 'arraybuffer';
   sent: Uint8Array[] = [];
+  commands: string[] = [];
   onopen: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
@@ -28,7 +33,11 @@ class UploadSocketMock {
     }, 0);
   }
 
-  send(payload: Uint8Array): void {
+  send(payload: Uint8Array | string): void {
+    if (typeof payload === 'string') {
+      this.commands.push(payload);
+      return;
+    }
     this.sent.push(payload);
     if (UploadSocketMock.tracksBufferedAmount) this.bufferedAmount += payload.byteLength;
   }
@@ -140,5 +149,31 @@ describe('upload lane', () => {
     socket.drainAndAck(1);
     await vi.advanceTimersByTimeAsync(50);
     expect(socket.sent).toHaveLength(sent);
+  });
+
+  it('asks the server to drop queued download frames before closing', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', UploadSocketMock as unknown as typeof WebSocket);
+    const lane = openDownloadLane(
+      { serverUrl: 'wss://speed.example.com/v1/ws', connectionCount: 2, messageSizeKb: 64 },
+      { onOpen: () => {}, onError: () => {} }
+    );
+    await vi.advanceTimersByTimeAsync(1);
+    lane.start();
+    lane.close();
+
+    for (const socket of UploadSocketMock.instances) {
+      expect(socket.commands).toEqual(['START 64 500', 'CLOSE']);
+      expect(socket.readyState).toBe(UploadSocketMock.CLOSED);
+    }
+  });
+
+  it('does not send CLOSE on upload sockets', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', UploadSocketMock as unknown as typeof WebSocket);
+    const lane = await openLane(64);
+    lane.start();
+    lane.close();
+    expect(UploadSocketMock.instances[0].commands).toEqual([]);
   });
 });

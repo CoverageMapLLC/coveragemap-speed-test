@@ -42,9 +42,16 @@ const UPLOAD_REFILL_BUDGET_MS = 4;
 /** 64 MB with 1 MB chunks: 1.7 Gbps per socket at 300 ms round trip time. */
 const MAX_UNACKED_UPLOAD_CHUNKS = 64;
 
-function closeSockets(sockets: WebSocket[]): void {
+/**
+ * Closes every socket. With `abortServerStream`, each open socket first sends `CLOSE`, which
+ * makes the server terminate the connection at once. Otherwise a graceful close waits behind
+ * every frame the server has already queued, and on a slow link those frames keep using the
+ * downlink long after the stage ended, starving the stages that follow.
+ */
+function closeSockets(sockets: WebSocket[], abortServerStream = false): void {
   for (const socket of sockets) {
     try {
+      if (abortServerStream && socket.readyState === WebSocket.OPEN) socket.send('CLOSE');
       if (socket.readyState !== WebSocket.CLOSED) socket.close();
     } catch {
       // ignore
@@ -148,7 +155,7 @@ export function openDownloadLane(
     },
     close() {
       closed = true;
-      closeSockets(sockets);
+      closeSockets(sockets, true);
     },
     get bytes() {
       return bytes;
