@@ -743,6 +743,7 @@ interface SpeedTestServer {
   longitude: number | null;
   distance: number | null;
   isCDN: boolean | null;
+  selfHosted?: boolean;
 }
 ```
 
@@ -762,6 +763,7 @@ Premium servers are automatically filtered out by the client before the list is 
 | `longitude` | `number \| null` | Geographic longitude. |
 | `distance` | `number \| null` | Distance from the requesting client in kilometers, when available. |
 | `isCDN` | `boolean \| null` | Whether the server is CDN-backed. |
+| `selfHosted` | `boolean` *(optional)* | `true` for a self-hosted server the user entered manually. Absent for CoverageMap network servers. Results upload to CoverageMap but are not mapped when this flag is present. |
 
 #### `getServerWsUrl(server)`
 

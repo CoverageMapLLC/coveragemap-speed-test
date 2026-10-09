@@ -1136,4 +1136,58 @@ describe('engine regression', () => {
     expect(result.testType.uploadConnectionCount).toBeNull();
     expect(result.results.measurements.failedReason).toBe('estimation timeout');
   });
+
+  it('runs against a self-hosted server object and preserves selfHosted on results.server', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+
+    // Shape returned by GET /v1/server on @coveragemap/speed-test-server, including the fields
+    // that are not part of SpeedTestServer. Everything must flow through untouched.
+    const selfHostedServer = {
+      id: '6f1c2c4e-0a4b-4d0f-9a5e-3c2b1d0e9f8a',
+      domain: 'speedtest.example.com',
+      port: 8443,
+      provider: 'Example Operator',
+      city: 'Philadelphia',
+      region: 'PA',
+      country: 'US',
+      location: 'Philadelphia, PA',
+      latitude: 39.9526,
+      longitude: -75.1652,
+      distance: null,
+      isCDN: false,
+      selfHosted: true,
+      version: '0.1.0',
+      protocolVersion: 1,
+    };
+
+    const engine = new SpeedTestEngine({ application: applicationMetadata });
+    const result = await engine.run(selfHostedServer);
+
+    // No discovery: the supplied object is the target server.
+    expect(mocks.getServerListMock).not.toHaveBeenCalled();
+
+    // Every stage runner connects to the self-hosted endpoint over wss.
+    const expectedUrl = 'wss://speedtest.example.com:8443/v1/ws';
+    for (const stageMock of [
+      mocks.latencyMock,
+      mocks.downloadEstimationMock,
+      mocks.downloadSpeedMock,
+      mocks.uploadEstimationMock,
+      mocks.uploadSpeedMock,
+    ]) {
+      expect(stageMock).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: expectedUrl }));
+    }
+
+    // The server object is embedded in the result exactly as supplied.
+    expect(result.results.server).toEqual(selfHostedServer);
+    expect(result.results.server?.selfHosted).toBe(true);
+    expect(result.results.testStatus).toBe('passed');
+
+    // The upload carries the same server object so the Core API can read selfHosted.
+    expect(mocks.uploadResultsMock).toHaveBeenCalledTimes(1);
+    const uploaded = mocks.uploadResultsMock.mock.calls[0][0] as NetworkTestResultTestResults[];
+    expect(uploaded).toHaveLength(1);
+    expect(uploaded[0].results.server).toEqual(selfHostedServer);
+    expect(uploaded[0].results.server?.selfHosted).toBe(true);
+  });
 });
