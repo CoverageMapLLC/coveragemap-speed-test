@@ -171,7 +171,7 @@ Frequently used fields:
 - `type`: currently `single`
 - `testsRun`: flags indicating which of the three test phases (latency, download, upload) were enabled for this run
 - `downloadTestDuration` and `uploadTestDuration`: `null` when the corresponding test was not enabled
-- `testProtocol`: currently `WSS`
+- `testProtocol`: `TCP` when the stages ran over raw TCP (Node.js against a server that offers it, see `config.transport`), otherwise `WSS`
 - `downloadConnectionCount` and `uploadConnectionCount`: `null` when the corresponding test was not enabled or did not reach the estimation phase
 - `downloadPacketSize` and `uploadPacketSize`: `null` when the corresponding test was not enabled or did not reach the estimation phase
 

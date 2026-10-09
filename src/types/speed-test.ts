@@ -52,8 +52,9 @@ export interface SpeedTestConfig {
   /**
    * Threads the download and upload stages spread their sockets across when the estimated
    * speed is 1 Gbps or more. `0` (the default) chooses automatically, `1` keeps every socket
-   * on the calling thread. Extra threads are Node.js worker threads, used only with Node's
-   * built-in WebSocket.
+   * on the calling thread. Extra threads are Node.js worker threads, used with raw TCP or
+   * with Node's built-in WebSocket; a WebSocket polyfill keeps every socket on the calling
+   * thread.
    */
   throughputThreads?: number;
   /**

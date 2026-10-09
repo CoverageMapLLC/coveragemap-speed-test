@@ -583,7 +583,7 @@ const result: NetworkTestResultTestResults = await engine.run();
 
 ### Node.js WebSocket bootstrap
 
-The protocol runners rely on `globalThis.WebSocket`. Node 22+ ships it natively; for older runtimes, polyfill it once at app startup before importing the engine.
+In Node.js the engine runs over raw TCP when the server offers it (`config.transport: 'auto'`, the default) and needs no WebSocket for that. Every other server, including CDN servers, uses `globalThis.WebSocket`. Node 22+ ships it natively; for older runtimes, polyfill it once at app startup before importing the engine.
 
 ```ts
 import { WebSocket } from 'ws';
