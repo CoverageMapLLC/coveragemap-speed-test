@@ -29,6 +29,7 @@ import {
   getDownloadConnectionCount,
   getUploadMessageSizeKb,
   getUploadConnectionCount,
+  getThroughputThreadCount,
 } from './types/speed-test.js';
 import { getServerWsUrl } from './types/speed-server.js';
 import { CancellationToken, CancellationError } from './utils/cancellation.js';
@@ -286,6 +287,10 @@ export class SpeedTestEngine {
             latencyMs,
             jitterMs,
             snapshotIntervalMs: this.config.snapshotIntervalMs,
+            threads: getThroughputThreadCount(
+              downloadEstimation.speedMbps,
+              this.config.throughputThreads
+            ),
             cancellationToken: this.cancellationToken,
             onSnapshot: (snapshot) => this.callbacks.onDownloadProgress?.(snapshot),
           });
@@ -318,6 +323,10 @@ export class SpeedTestEngine {
             latencyMs,
             jitterMs,
             snapshotIntervalMs: this.config.snapshotIntervalMs,
+            threads: getThroughputThreadCount(
+              uploadEstimation.speedMbps,
+              this.config.throughputThreads
+            ),
             cancellationToken: this.cancellationToken,
             onSnapshot: (snapshot) => this.callbacks.onUploadProgress?.(snapshot),
           });
@@ -640,10 +649,11 @@ function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): Speed
     ['snapshotIntervalMs', 50, 5000],
     ['latencyTimeoutMs', 3000, 30000],
     ['estimationTimeoutMs', 3000, 30000],
+    ['throughputThreads', 0, 64],
   ];
 
   for (const [field, min, max] of rules) {
-    const value = config[field];
+    const value = config[field] ?? DEFAULT_CONFIG[field] ?? 0;
     if (value < min || value > max) {
       throw new Error(
         `SpeedTestEngineOptions.config.${field} must be between ${min} and ${max}`
