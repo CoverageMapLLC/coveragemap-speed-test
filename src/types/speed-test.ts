@@ -50,9 +50,10 @@ export interface SpeedTestConfig {
   latencyTimeoutMs: number;
   estimationTimeoutMs: number;
   /**
-   * Most threads the download and upload stages may spread their sockets across. `0` (the
-   * default) chooses from the estimated speed, `1` keeps every socket on the calling thread.
-   * Extra threads are Node.js worker threads, used only with Node's built-in WebSocket.
+   * Threads the download and upload stages spread their sockets across when the estimated
+   * speed is 1 Gbps or more. `0` (the default) chooses automatically, `1` keeps every socket
+   * on the calling thread. Extra threads are Node.js worker threads, used only with Node's
+   * built-in WebSocket.
    */
   throughputThreads?: number;
 }
@@ -132,14 +133,14 @@ const MBPS_PER_THROUGHPUT_THREAD = 1000;
 const MAX_AUTO_THROUGHPUT_THREADS = 4;
 
 /**
- * Threads for a throughput stage. Below 1 Gbps one thread is plenty. Faster links get a
- * thread per estimated gigabit, up to 4, unless `configuredThreads` sets the maximum.
+ * Threads for a throughput stage. Below 1 Gbps one thread is plenty. Faster links use
+ * `configuredThreads`, or a thread per estimated gigabit up to 4 when it is 0.
  */
 export function getThroughputThreadCount(estimatedMbps: number, configuredThreads = 0): number {
-  const auto = Math.min(
+  if (estimatedMbps < MBPS_PER_THROUGHPUT_THREAD) return 1;
+  if (configuredThreads > 0) return configuredThreads;
+  return Math.min(
     MAX_AUTO_THROUGHPUT_THREADS,
     Math.max(1, Math.ceil(estimatedMbps / MBPS_PER_THROUGHPUT_THREAD))
   );
-  if (estimatedMbps < MBPS_PER_THROUGHPUT_THREAD) return 1;
-  return configuredThreads > 0 ? Math.min(auto, configuredThreads) : auto;
 }

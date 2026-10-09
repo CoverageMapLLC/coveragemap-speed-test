@@ -89,10 +89,11 @@ describe('throughput threads', () => {
     expect(getThroughputThreadCount(25000)).toBe(4);
   });
 
-  it('caps the thread count at the configured maximum', () => {
+  it('uses the configured thread count for multi-gigabit stages', () => {
     expect(getThroughputThreadCount(25000, 1)).toBe(1);
     expect(getThroughputThreadCount(25000, 2)).toBe(2);
-    expect(getThroughputThreadCount(25000, 16)).toBe(4);
+    expect(getThroughputThreadCount(25000, 16)).toBe(16);
+    expect(getThroughputThreadCount(500, 16)).toBe(1);
   });
 
   it('does not treat a DOM environment as Node.js', () => {
