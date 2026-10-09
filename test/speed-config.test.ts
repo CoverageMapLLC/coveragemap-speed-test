@@ -19,7 +19,7 @@ describe('speed-test thresholds', () => {
 
     expect(getDownloadConnectionCount(0.2)).toBe(1);
     expect(getDownloadConnectionCount(5)).toBe(4);
-    expect(getDownloadConnectionCount(5000)).toBe(10);
+    expect(getDownloadConnectionCount(5000)).toBe(12);
   });
 
   it('maps estimated upload speed to packet size and connections', () => {
@@ -29,7 +29,7 @@ describe('speed-test thresholds', () => {
 
     expect(getUploadConnectionCount(0.2)).toBe(1);
     expect(getUploadConnectionCount(5)).toBe(4);
-    expect(getUploadConnectionCount(1200)).toBe(10);
+    expect(getUploadConnectionCount(1200)).toBe(12);
   });
 });
 

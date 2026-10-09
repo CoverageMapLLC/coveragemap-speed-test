@@ -81,12 +81,11 @@ describe('throughput threads', () => {
     expect(splitConnections(5, 1)).toEqual([5]);
   });
 
-  it('uses one thread below 1 Gbps and one per gigabit above, up to 4', () => {
+  it('uses one thread below 1 Gbps and six above', () => {
     expect(getThroughputThreadCount(0.1)).toBe(1);
     expect(getThroughputThreadCount(999)).toBe(1);
-    expect(getThroughputThreadCount(1000)).toBe(1);
-    expect(getThroughputThreadCount(2500)).toBe(3);
-    expect(getThroughputThreadCount(25000)).toBe(4);
+    expect(getThroughputThreadCount(1000)).toBe(6);
+    expect(getThroughputThreadCount(25000)).toBe(6);
   });
 
   it('uses the configured thread count for multi-gigabit stages', () => {
