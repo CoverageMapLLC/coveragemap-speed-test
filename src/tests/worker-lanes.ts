@@ -127,7 +127,8 @@ async function loadWorkerSupport(): Promise<{ Worker: NodeWorkerConstructor; cor
  * Opens lanes on worker threads, splitting `connectionCount` sockets across up to `threads`
  * workers. Uses at most half of the available cores. Resolves null when worker threads are
  * unavailable or would use a different socket implementation, so the caller can fall back
- * to a lane on the calling thread.
+ * to a lane on the calling thread. Rejects when a socket fails to connect, like a lane on
+ * the calling thread does: retrying on one thread would hide the failure.
  */
 export async function openWorkerLanes(
   direction: ThroughputDirection,
@@ -147,17 +148,19 @@ export async function openWorkerLanes(
   const counterView = new BigInt64Array(counters);
   const workers: NodeWorker[] = [];
 
-  return new Promise<ThroughputLane[] | null>((resolve) => {
+  return new Promise<ThroughputLane[] | null>((resolve, reject) => {
     let state: 'pending' | 'resolved' | 'abandoned' = 'pending';
     let readyCount = 0;
     // Lanes that open before every worker is ready are reported once the lanes are handed over.
     let pendingOpens = 0;
 
-    const abandon = () => {
+    /** Gives up on workers: resolves null for the fallback, or rejects with `error`. */
+    const abandon = (error?: Error) => {
       if (state !== 'pending') return;
       state = 'abandoned';
       for (const worker of workers) void worker.terminate();
-      resolve(null);
+      if (error) reject(error);
+      else resolve(null);
     };
 
     let firstSocketIndex = 0;
@@ -203,15 +206,21 @@ export async function openWorkerLanes(
             else pendingOpens++;
             break;
           case 'error':
+            // A socket failed to connect. That fails the stage whether or not every worker
+            // is ready yet.
             if (state === 'resolved') callbacks.onError(new Error(message.message));
-            else abandon();
+            else abandon(new Error(message.message));
             break;
         }
       });
+      // The worker itself failed (for example its module could not load): workers are
+      // unavailable, so fall back unless the lanes were already handed over.
       worker.on('error', (error) => {
         if (state === 'resolved') callbacks.onError(error);
         else abandon();
       });
+      // A worker that exits before it is ready would otherwise leave this pending forever.
+      worker.on('exit', () => abandon());
     });
   });
 }
