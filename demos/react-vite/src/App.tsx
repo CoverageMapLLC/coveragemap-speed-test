@@ -24,6 +24,7 @@ import {
   type LiveCallbackState,
 } from './live-measurements';
 import { selectTestSummary, TestSummary } from './test-summary';
+import { useBatchedUpdates } from './batched-updates';
 
 const engine = new SpeedTestEngine({
   application: {
@@ -79,6 +80,8 @@ export default function App() {
   }, [selectedServerId, servers]);
 
   const testSummary = useMemo(() => selectTestSummary(callbackState), [callbackState]);
+  // Pings and progress snapshots are batched; stage changes, results, and errors show at once.
+  const { queue: queueCallbackState, flush: flushCallbackState } = useBatchedUpdates(setCallbackState);
 
   const loadServers = async () => {
     setError(null);
@@ -93,47 +96,56 @@ export default function App() {
   const runTest = async () => {
     setError(null);
     setResult(null);
+    flushCallbackState();
     setCallbackState(EMPTY_CALLBACK_STATE);
     setIsRunning(true);
 
     engine.updateCallbacks({
-      onStageChange: (nextStage) => setStage(nextStage),
+      onStageChange: (nextStage) => {
+        flushCallbackState();
+        setStage(nextStage);
+      },
       onLatencyPing: (latencyMs, index) => {
-        setCallbackState((previous) => ({
+        queueCallbackState((previous) => ({
           ...previous,
           latencyPings: [...previous.latencyPings, { index, latencyMs }],
         }));
       },
       onLatencyResult: (data) => {
+        flushCallbackState();
         setCallbackState((previous) => ({ ...previous, latencyResult: data }));
       },
       onDownloadProgress: (snapshot) => {
-        setCallbackState((previous) => ({
+        queueCallbackState((previous) => ({
           ...previous,
           downloadProgress: snapshot,
           downloadSnapshots: [...previous.downloadSnapshots, snapshot],
         }));
       },
       onDownloadResult: (data) => {
+        flushCallbackState();
         setCallbackState((previous) => ({ ...previous, downloadResult: data }));
       },
       onUploadProgress: (snapshot) => {
-        setCallbackState((previous) => ({
+        queueCallbackState((previous) => ({
           ...previous,
           uploadProgress: snapshot,
           uploadSnapshots: [...previous.uploadSnapshots, snapshot],
         }));
       },
       onUploadResult: (data) => {
+        flushCallbackState();
         setCallbackState((previous) => ({ ...previous, uploadResult: data }));
       },
       onComplete: (latency, download, upload) => {
+        flushCallbackState();
         setCallbackState((previous) => ({
           ...previous,
           complete: { latency, download, upload },
         }));
       },
       onError: (callbackError, callbackStage) => {
+        flushCallbackState();
         setCallbackState((previous) => ({
           ...previous,
           lastError: {
