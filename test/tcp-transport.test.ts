@@ -7,12 +7,14 @@ import { runDownloadEstimationTest } from '../src/tests/download-estimation-test
 import { runDownloadSpeedTest } from '../src/tests/download-speed-test.js';
 import { runLatencyTest } from '../src/tests/latency-test.js';
 import {
+  getServerProtocols,
   getServerTcpUrl,
+  getServerWebSocketUrl,
   isTcpUrl,
   loadTcpTransport,
   openSocket,
+  requiresSecureWebSocket,
   selectServerUrl,
-  serverSupportsRawTcp,
   SocketConnectError,
   SOCKET_OPEN,
 } from '../src/tests/sockets.js';
@@ -76,64 +78,72 @@ beforeAll(async () => {
   expect(await loadTcpTransport()).not.toBeNull();
 });
 
-describe('raw TCP URLs', () => {
-  it('uses the WebSocket port with tcp for local servers and tcps otherwise', () => {
+describe('server URLs', () => {
+  it('uses the WebSocket port for raw TCP, always without TLS', () => {
     expect(getServerTcpUrl(server({ port: 8080 }))).toBe('tcp://127.0.0.1:8080');
-    expect(getServerTcpUrl(server({ id: 'abc', domain: 'speed.example.com', port: 443 }))).toBe(
-      'tcps://speed.example.com:443'
-    );
-    expect(getServerTcpUrl(server({ id: 'abc', domain: 'speed.example.com', port: null }))).toBe(
-      'tcps://speed.example.com:443'
-    );
+    expect(getServerTcpUrl(server({ id: 'abc', domain: 'speed.example.com', port: 443 }))).toBe('tcp://speed.example.com:443');
+    expect(getServerTcpUrl(server({ id: 'abc', domain: 'speed.example.com', port: null }))).toBe('tcp://speed.example.com:80');
+  });
+
+  it('builds plain and secure WebSocket URLs on the same port', () => {
+    const remote = server({ id: 'abc', domain: 'speed.example.com', port: 443 });
+    expect(getServerWebSocketUrl(remote, false)).toBe('ws://speed.example.com:443/v1/ws');
+    expect(getServerWebSocketUrl(remote, true)).toBe('wss://speed.example.com:443/v1/ws');
+    expect(getServerWebSocketUrl(server({ port: null }), false)).toBe('ws://127.0.0.1:80/v1/ws');
+    expect(getServerWebSocketUrl(server({ port: null }), true)).toBe('wss://127.0.0.1:443/v1/ws');
   });
 
   it('recognizes raw TCP URLs', () => {
     expect(isTcpUrl('tcp://a:1')).toBe(true);
-    expect(isTcpUrl('tcps://a:1')).toBe(true);
+    expect(isTcpUrl('ws://a:1/v1/ws')).toBe(false);
     expect(isTcpUrl('wss://a:1/v1/ws')).toBe(false);
+  });
+
+  it('assumes secure WebSocket for servers that report no protocols, plain for local ones', () => {
+    expect(getServerProtocols(server({ id: 'abc' }))).toEqual(['WSSv1']);
+    expect(getServerProtocols(server({ id: 'abc', protocols: [] }))).toEqual(['WSSv1']);
+    expect(getServerProtocols(server())).toEqual(['WSv1']);
+    expect(getServerProtocols(server({ protocols: ['TCPv1'] }))).toEqual(['TCPv1']);
+  });
+
+  it('never requires secure WebSockets in Node.js', () => {
+    expect(requiresSecureWebSocket()).toBe(false);
   });
 });
 
 describe('selectServerUrl', () => {
-  const ALL = ['WSSv1', 'WSv1', 'TCPSv1', 'TCPv1'];
+  const ALL = ['WSSv1', 'WSv1', 'TCPv1'];
+  const remote = (protocols?: string[]) => server({ id: 'abc', domain: 'speed.example.com', port: 443, protocols });
+  const TCP = { url: 'tcp://speed.example.com:443', protocol: 'TCP' };
+  const WS = { url: 'ws://speed.example.com:443/v1/ws', protocol: 'WS' };
+  const WSS = { url: 'wss://speed.example.com:443/v1/ws', protocol: 'WSS' };
 
-  it('uses raw TCP with a WebSocket fallback when the server lists it', async () => {
-    expect(await selectServerUrl(server({ port: 8080, protocols: ALL }))).toEqual({
-      primary: { url: 'tcp://127.0.0.1:8080', protocol: 'TCP' },
-      fallback: { url: 'ws://127.0.0.1:8080/v1/ws', protocol: 'WSS' },
-    });
-    expect(await selectServerUrl(server({ id: 'abc', domain: 'speed.example.com', port: 443, protocols: ['WSSv1', 'TCPSv1'] }))).toEqual({
-      primary: { url: 'tcps://speed.example.com:443', protocol: 'TCP' },
-      fallback: { url: 'wss://speed.example.com:443/v1/ws', protocol: 'WSS' },
+  it('orders the transports fastest first: raw TCP, WebSocket, secure WebSocket', async () => {
+    expect(await selectServerUrl(remote(ALL))).toEqual({ primary: TCP, fallbacks: [WS, WSS] });
+    expect(await selectServerUrl(remote(['WSSv1', 'TCPv1']))).toEqual({ primary: TCP, fallbacks: [WSS] });
+    expect(await selectServerUrl(remote(['WSv1', 'WSSv1']))).toEqual({ primary: WS, fallbacks: [WSS] });
+    expect(await selectServerUrl(remote(['TCPv1', 'WSv1']))).toEqual({ primary: TCP, fallbacks: [WS] });
+  });
+
+  it('uses only what the server lists', async () => {
+    expect(await selectServerUrl(remote(['WSSv1']))).toEqual({ primary: WSS, fallbacks: [] });
+    expect(await selectServerUrl(remote())).toEqual({ primary: WSS, fallbacks: [] });
+    expect(await selectServerUrl(remote(['TCPv1']))).toEqual({ primary: TCP, fallbacks: [] });
+    expect(await selectServerUrl(server({ port: 8080 }))).toEqual({
+      primary: { url: 'ws://127.0.0.1:8080/v1/ws', protocol: 'WS' },
+      fallbacks: [],
     });
   });
 
-  it('uses WebSocket for servers that do not list raw TCP or report no protocols', async () => {
-    for (const protocols of [undefined, ['WSSv1'], ['WSSv1', 'WSv1']]) {
-      expect(await selectServerUrl(server({ port: 8080, protocols }))).toEqual({
-        primary: { url: 'ws://127.0.0.1:8080/v1/ws', protocol: 'WSS' },
-        fallback: null,
-      });
-    }
+  it('ignores protocols it does not know', async () => {
+    expect(await selectServerUrl(remote(['QUICv1', 'WSSv1']))).toEqual({ primary: WSS, fallbacks: [] });
+    await expect(selectServerUrl(remote(['QUICv1']))).rejects.toThrow('The server offers no transport this runtime can use (QUICv1)');
   });
 
-  it('needs the variant matching the server: TCPv1 for local servers, TCPSv1 otherwise', () => {
-    expect(serverSupportsRawTcp(server({ protocols: ['TCPv1'] }))).toBe(true);
-    expect(serverSupportsRawTcp(server({ protocols: ['TCPSv1'] }))).toBe(false);
-    expect(serverSupportsRawTcp(server({ id: 'abc', protocols: ['TCPSv1'] }))).toBe(true);
-    expect(serverSupportsRawTcp(server({ id: 'abc', protocols: ['TCPv1'] }))).toBe(false);
-    expect(serverSupportsRawTcp(server({ id: 'abc' }))).toBe(false);
-  });
-
-  it('honors websocket and tcp whatever the server lists', async () => {
-    expect(await selectServerUrl(server({ port: 1, protocols: ALL }), 'websocket')).toEqual({
-      primary: { url: 'ws://127.0.0.1:1/v1/ws', protocol: 'WSS' },
-      fallback: null,
-    });
-    expect(await selectServerUrl(server({ port: 1 }), 'tcp')).toEqual({
-      primary: { url: 'tcp://127.0.0.1:1', protocol: 'TCP' },
-      fallback: null,
-    });
+  it('forces one transport with tcp, ws, and wss, whatever the server lists', async () => {
+    expect(await selectServerUrl(remote(['WSSv1']), 'tcp')).toEqual({ primary: TCP, fallbacks: [] });
+    expect(await selectServerUrl(remote(['WSSv1']), 'ws')).toEqual({ primary: WS, fallbacks: [] });
+    expect(await selectServerUrl(remote(ALL), 'wss')).toEqual({ primary: WSS, fallbacks: [] });
   });
 
   it('never connects to the server to choose', async () => {
@@ -174,6 +184,31 @@ describe('first connection failures', () => {
     await expect(
       runLatencyTest({
         serverUrl: `tcp://127.0.0.1:${(silent.address() as AddressInfo).port}`,
+        pingCount: 3,
+        connectTimeoutMs: 300,
+        cancellationToken: new CancellationToken(),
+      })
+    ).rejects.toBeInstanceOf(SocketConnectError);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('gives up on a WebSocket whose handshake is never answered after connectTimeoutMs', async () => {
+    if (typeof WebSocket === 'undefined') {
+      // Node.js 20 has no global WebSocket; the library expects one for ws:// URLs.
+      const { WebSocket: WsWebSocket } = await import('ws');
+      (globalThis as { WebSocket?: unknown }).WebSocket = WsWebSocket;
+    }
+    const sockets = new Set<net.Socket>();
+    const silent = net.createServer((socket) => sockets.add(socket.on('error', () => {})));
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    cleanups.push(() => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise<void>((resolve) => silent.close(() => resolve()));
+    });
+    const started = Date.now();
+    await expect(
+      runLatencyTest({
+        serverUrl: `ws://127.0.0.1:${(silent.address() as AddressInfo).port}/v1/ws`,
         pingCount: 3,
         connectTimeoutMs: 300,
         cancellationToken: new CancellationToken(),

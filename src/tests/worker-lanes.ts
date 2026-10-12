@@ -14,8 +14,8 @@ import { isNodeRuntime, isTcpUrl, loadTcpTransport } from './sockets.js';
  *
  * Workers use their own global `WebSocket`. They are only used when it is the same
  * implementation as the calling thread's, so a polyfill or custom subclass installed by the
- * application always keeps every socket on the calling thread. Raw TCP lanes (`tcp://` and
- * `tcps://` URLs) load the transport inside the worker and need no global `WebSocket`.
+ * application always keeps every socket on the calling thread. Raw TCP lanes (`tcp://` URLs)
+ * load the transport inside the worker and need no global `WebSocket`.
  */
 
 export interface WorkerLaneData extends ThroughputLaneOptions {

@@ -48,25 +48,26 @@ const throughput = {
   loadedLatency: mockLoadedLatency,
 };
 
+const LATENCY = {
+  latencies: [1, 1],
+  minLatency: 1,
+  averageLatency: 1,
+  medianLatency: 1,
+  maxLatency: 1,
+  minJitter: 0,
+  averageJitter: 0,
+  medianJitter: 0,
+  maxJitter: 0,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.latency.mockResolvedValue({
-    latencies: [1, 1],
-    minLatency: 1,
-    averageLatency: 1,
-    medianLatency: 1,
-    maxLatency: 1,
-    minJitter: 0,
-    averageJitter: 0,
-    medianJitter: 0,
-    maxJitter: 0,
-  });
+  mocks.latency.mockResolvedValue(LATENCY);
   mocks.downloadEstimation.mockResolvedValue({ durationMs: 100, bytes: 100_000, speedMbps: 50 });
   mocks.uploadEstimation.mockResolvedValue({ durationMs: 100, bytes: 100_000, speedMbps: 50 });
   mocks.download.mockResolvedValue(throughput);
   mocks.upload.mockResolvedValue(throughput);
 });
-
 
 function localServer(port: number, overrides: Partial<SpeedTestServer> = {}): SpeedTestServer {
   return {
@@ -86,7 +87,9 @@ function localServer(port: number, overrides: Partial<SpeedTestServer> = {}): Sp
   };
 }
 
-const ALL = ['WSSv1', 'WSv1', 'TCPSv1', 'TCPv1'];
+const ALL = ['WSSv1', 'WSv1', 'TCPv1'];
+
+const remote = (protocols?: string[]) => localServer(443, { id: 'remote', domain: 'speed.example.com', protocols });
 
 async function run(
   server: SpeedTestServer,
@@ -112,74 +115,106 @@ async function run(
 
 describe('engine transport choice', () => {
   it('runs every stage over raw TCP when the server lists it, without probing first', async () => {
-    const result = await run(localServer(8080, { protocols: ALL }));
-    expect(result).toMatchObject({ protocol: 'TCP', status: 'passed', urls: ['tcp://127.0.0.1:8080'] });
+    const result = await run(remote(ALL));
+    expect(result).toMatchObject({ protocol: 'TCP', status: 'passed', urls: ['tcp://speed.example.com:443'] });
     // The first connection gets a short connect timeout so a blocked network falls back fast.
-    expect(result.latencyCalls).toEqual([['tcp://127.0.0.1:8080', 3000]]);
+    expect(result.latencyCalls).toEqual([['tcp://speed.example.com:443', 3000]]);
   });
 
-  it('uses WebSocket for servers that report no protocols or only WebSocket', async () => {
-    for (const server of [localServer(8080), localServer(8080, { protocols: ['WSSv1', 'WSv1'] }), localServer(8080, { isCDN: true, protocols: ['WSSv1'] })]) {
+  it('uses plain WebSocket before secure WebSocket', async () => {
+    const result = await run(remote(['WSSv1', 'WSv1']));
+    expect(result).toMatchObject({ protocol: 'WS', status: 'passed', urls: ['ws://speed.example.com:443/v1/ws'] });
+    expect(result.latencyCalls).toEqual([['ws://speed.example.com:443/v1/ws', 3000]]);
+  });
+
+  it('uses secure WebSocket for servers that offer only that or report no protocols', async () => {
+    const cdn = localServer(443, { id: 'cdn', domain: 'cdn.example.com', isCDN: true, protocols: ['WSSv1'] });
+    for (const server of [remote(), remote([]), remote(['WSSv1']), cdn]) {
       vi.clearAllMocks();
       const result = await run(server);
-      expect(result).toMatchObject({ protocol: 'WSS', status: 'passed', urls: ['ws://127.0.0.1:8080/v1/ws'] });
-      expect(result.latencyCalls).toEqual([['ws://127.0.0.1:8080/v1/ws', undefined]]);
+      expect(result.protocol).toBe('WSS');
+      expect(result.urls).toEqual([`wss://${server.domain}:443/v1/ws`]);
+      // Nothing to fall back to, so no short connect timeout.
+      expect(result.latencyCalls).toEqual([[result.urls[0], undefined]]);
     }
   });
 
-  it('uses tls URLs for servers other than local', async () => {
-    const remote = localServer(443, { id: 'remote', domain: 'speed.example.com', protocols: ALL });
-    expect(await run(remote)).toMatchObject({ protocol: 'TCP', urls: ['tcps://speed.example.com:443'] });
-    vi.clearAllMocks();
-    expect(await run(remote, { transport: 'websocket' })).toMatchObject({ protocol: 'WSS', urls: ['wss://speed.example.com:443/v1/ws'] });
+  it('uses plain WebSocket for local servers that report no protocols', async () => {
+    const result = await run(localServer(8080));
+    expect(result).toMatchObject({ protocol: 'WS', urls: ['ws://127.0.0.1:8080/v1/ws'] });
   });
 
-  it('forces raw TCP with transport tcp, even when the server does not list it', async () => {
-    expect(await run(localServer(8080), { transport: 'tcp' })).toMatchObject({ protocol: 'TCP', urls: ['tcp://127.0.0.1:8080'] });
+  it('forces one transport with tcp, ws, and wss, whatever the server lists', async () => {
+    expect(await run(remote(['WSSv1']), { transport: 'tcp' })).toMatchObject({ protocol: 'TCP', urls: ['tcp://speed.example.com:443'] });
+    vi.clearAllMocks();
+    expect(await run(remote(['WSSv1']), { transport: 'ws' })).toMatchObject({ protocol: 'WS', urls: ['ws://speed.example.com:443/v1/ws'] });
+    vi.clearAllMocks();
+    expect(await run(remote(ALL), { transport: 'wss' })).toMatchObject({ protocol: 'WSS', urls: ['wss://speed.example.com:443/v1/ws'] });
   });
 });
 
 describe('first connection fallback', () => {
-  const failTcp = () =>
+  /** The first connection cannot open over the transports whose URLs start with these prefixes. */
+  const failOver = (...prefixes: string[]) =>
     mocks.latency.mockImplementation(async ({ serverUrl }: { serverUrl: string }) => {
-      if (serverUrl.startsWith('tcp')) throw new SocketConnectError('WebSocket connection failed during latency test');
-      return { latencies: [1, 1], minLatency: 1, averageLatency: 1, medianLatency: 1, maxLatency: 1, minJitter: 0, averageJitter: 0, medianJitter: 0, maxJitter: 0 };
+      if (prefixes.some((prefix) => serverUrl.startsWith(prefix))) {
+        throw new SocketConnectError('Connection failed during latency test');
+      }
+      return LATENCY;
     });
 
-  it('switches the whole run to WebSocket when the first raw TCP connection cannot open', async () => {
-    failTcp();
-    const result = await run(localServer(8080, { protocols: ALL }));
-    expect(result).toMatchObject({ protocol: 'WSS', status: 'passed', failedReason: null, urls: ['ws://127.0.0.1:8080/v1/ws'] });
+  it('moves the whole run to plain WebSocket when raw TCP cannot open', async () => {
+    failOver('tcp://');
+    const result = await run(remote(ALL));
+    expect(result).toMatchObject({ protocol: 'WS', status: 'passed', failedReason: null, urls: ['ws://speed.example.com:443/v1/ws'] });
     expect(result.latencyCalls).toEqual([
-      ['tcp://127.0.0.1:8080', 3000],
-      ['ws://127.0.0.1:8080/v1/ws', undefined],
+      ['tcp://speed.example.com:443', 3000],
+      ['ws://speed.example.com:443/v1/ws', 3000],
     ]);
   });
 
+  it('moves on to secure WebSocket when plain WebSocket cannot open either', async () => {
+    failOver('tcp://', 'ws://');
+    const result = await run(remote(ALL));
+    expect(result).toMatchObject({ protocol: 'WSS', status: 'passed', failedReason: null, urls: ['wss://speed.example.com:443/v1/ws'] });
+    expect(result.latencyCalls).toEqual([
+      ['tcp://speed.example.com:443', 3000],
+      ['ws://speed.example.com:443/v1/ws', 3000],
+      ['wss://speed.example.com:443/v1/ws', undefined],
+    ]);
+  });
+
+  it('fails when the last transport cannot open', async () => {
+    failOver('tcp://', 'ws://', 'wss://');
+    const result = await run(remote(ALL));
+    expect(result).toMatchObject({ protocol: 'WSS', status: 'failed' });
+    expect(result.latencyCalls).toHaveLength(3);
+  });
+
   it('falls back from the single latency ping when the latency stage is off', async () => {
-    failTcp();
-    const result = await run(localServer(8080, { protocols: ALL }), { tests: { latency: false, download: true, upload: true } });
-    expect(result).toMatchObject({ protocol: 'WSS', status: 'passed', urls: ['ws://127.0.0.1:8080/v1/ws'] });
+    failOver('tcp://');
+    const result = await run(remote(ALL), { tests: { latency: false, download: true, upload: true } });
+    expect(result).toMatchObject({ protocol: 'WS', status: 'passed', urls: ['ws://speed.example.com:443/v1/ws'] });
     expect(result.latencyCalls).toHaveLength(2);
   });
 
   it('does not fall back when the connection opened and something else failed', async () => {
     mocks.latency.mockRejectedValue(new Error('No ping responses received'));
-    const result = await run(localServer(8080, { protocols: ALL }));
+    const result = await run(remote(ALL));
     expect(result).toMatchObject({ protocol: 'TCP', status: 'failed', failedReason: 'No ping responses received' });
-    expect(result.latencyCalls).toEqual([['tcp://127.0.0.1:8080', 3000]]);
+    expect(result.latencyCalls).toEqual([['tcp://speed.example.com:443', 3000]]);
   });
 
-  it('does not fall back when raw TCP was required', async () => {
-    failTcp();
-    const result = await run(localServer(8080, { protocols: ALL }), { transport: 'tcp' });
+  it('does not fall back when a transport was forced', async () => {
+    failOver('tcp://');
+    const result = await run(remote(ALL), { transport: 'tcp' });
     expect(result).toMatchObject({ protocol: 'TCP', status: 'failed' });
-    expect(result.latencyCalls).toEqual([['tcp://127.0.0.1:8080', undefined]]);
+    expect(result.latencyCalls).toEqual([['tcp://speed.example.com:443', undefined]]);
   });
 
   it('only falls back on the first connection', async () => {
     mocks.download.mockRejectedValue(new SocketConnectError('Download WebSocket connection 3 failed'));
-    const result = await run(localServer(8080, { protocols: ALL }));
+    const result = await run(remote(ALL));
     expect(result).toMatchObject({ protocol: 'TCP', status: 'failed' });
     expect(mocks.download).toHaveBeenCalledTimes(1);
   });

@@ -19,8 +19,8 @@ export interface SpeedTestServer {
   selfHosted?: boolean;
   /**
    * Speed test protocols the server supports: a transport and the protocol version on it.
-   * `WSSv1` (secure WebSocket), `WSv1` (WebSocket), `TCPSv1` (raw TCP over TLS), and `TCPv1`
-   * (raw TCP). Absent for servers that predate the field, which only support `WSSv1`.
+   * `TCPv1` (raw TCP), `WSv1` (WebSocket), and `WSSv1` (secure WebSocket). Absent for servers
+   * that predate the field, which only support `WSSv1` (`WSv1` for `id === "local"`).
    */
   protocols?: string[];
 }

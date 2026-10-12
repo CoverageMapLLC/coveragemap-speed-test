@@ -7,7 +7,7 @@ export interface LatencyTestOptions {
   serverUrl: string;
   pingCount: number;
   timeoutMs?: number;
-  /** Raw TCP only: how long the socket may take to open. */
+  /** How long the socket may take to open before the stage fails with a SocketConnectError. */
   connectTimeoutMs?: number;
   cancellationToken: CancellationToken;
   onPing?: (latencyMs: number, index: number) => void;
@@ -23,9 +23,11 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
     let pingStartTime: number | null = null;
     let didConnect = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let connectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
+      if (connectTimer) clearTimeout(connectTimer);
       try {
         if (socket && socket.readyState !== SOCKET_CLOSED) {
           socket.close();
@@ -84,8 +86,19 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
       return;
     }
 
+    if (connectTimeoutMs) {
+      // A WebSocket has no connect timeout of its own: a network that drops the connection
+      // would otherwise hold the run until the latency timeout.
+      connectTimer = setTimeout(() => {
+        if (didConnect) return;
+        cleanup();
+        reject(new SocketConnectError(`Connection not open after ${connectTimeoutMs}ms`));
+      }, connectTimeoutMs);
+    }
+
     socket.onopen = () => {
       didConnect = true;
+      if (connectTimer) clearTimeout(connectTimer);
       sendPing();
     };
 

@@ -116,7 +116,7 @@ const engine = new SpeedTestEngine({
 | `config.latencyTimeoutMs` | 3000–30000 | `10000` | Latency phase timeout (ms) |
 | `config.estimationTimeoutMs` | 3000–30000 | `15000` | Estimation phase timeout (ms) |
 | `config.throughputThreads` | 0–64 | `0` | Node.js worker threads for multi-gigabit stages (`0` = automatic, `1` = calling thread only) |
-| `config.transport` | `auto`, `websocket`, `tcp` | `auto` | `auto` uses raw TCP in Node.js when the server offers it and WebSocket otherwise |
+| `config.transport` | `auto`, `tcp`, `ws`, `wss` | `auto` | `auto` uses the fastest transport the server offers: raw TCP in Node.js, then WebSocket, then secure WebSocket only where required (HTTPS pages) |
 | `config.browserWorker` | `true`, `false` | `true` | In browsers, run the test in a Web Worker so the page's rendering cannot slow it; the page's main thread is used where a worker cannot start |
 
 **Providers** — set after construction or at the module level:

@@ -146,7 +146,7 @@ describe.skipIf(browsers.length === 0).each(browsers)('browser stage worker in %
   it('runs every stage in a worker', async () => {
     const report = await run({});
     expect(report.status).toBe('passed');
-    expect(report.protocol).toBe('WSS');
+    expect(report.protocol).toBe('WS');
     expect(report.workersCreated).toBe(1);
     expect(report.workersTerminated).toBe(1);
     expect(report.stages).toEqual(['latency', 'downloadEstimation', 'download', 'uploadEstimation', 'upload', 'complete']);

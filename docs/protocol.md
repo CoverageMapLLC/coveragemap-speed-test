@@ -75,18 +75,18 @@ Each phase is designed to be cancellable, resilient to transient failures, and p
 │  │                                                           │  │
 │  │  1. getConnectionInfo()  ──────────────────────────────► │──┼──► GET /v1/connection
 │  │  2. getServers()         ──────────────────────────────► │──┼──► GET /v1/list?lat&lng
-│  │  3. runLatencyTest()     ──────────────────────────────► │──┼──► WSS /v1/ws  PING/PONG
-│  │  4. runDownloadEstimation() ──────────────────────────► │──┼──► WSS /v1/ws  START <kb> 1
-│  │  5. runDownloadSpeedTest()  ──────────────────────────► │──┼──► WSS /v1/ws  START <kb> 500
-│  │  6. runUploadEstimation()   ──────────────────────────► │──┼──► WSS /v1/ws  binary chunks
-│  │  7. runUploadSpeedTest()    ──────────────────────────► │──┼──► WSS /v1/ws  binary chunks
+│  │  3. runLatencyTest()     ──────────────────────────────► │──┼──► TCP/WS/WSS  PING/PONG
+│  │  4. runDownloadEstimation() ──────────────────────────► │──┼──► TCP/WS/WSS  START <kb> 1
+│  │  5. runDownloadSpeedTest()  ──────────────────────────► │──┼──► TCP/WS/WSS  START <kb> 500
+│  │  6. runUploadEstimation()   ──────────────────────────► │──┼──► TCP/WS/WSS  binary chunks
+│  │  7. runUploadSpeedTest()    ──────────────────────────► │──┼──► TCP/WS/WSS  binary chunks
 │  │  8. uploadResults()         ──────────────────────────► │──┼──► POST /api/v1/speedTests
 │  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
          │               │                    │
          ▼               ▼                    ▼
 api.speed.coveragemap.com  Speed Server    map.coveragemap.com
-  (HTTP Discovery)         (WSS Tests)     (Result Storage)
+  (HTTP Discovery)         (Speed Tests)   (Result Storage)
 ```
 
 ---
@@ -146,7 +146,7 @@ Each server object:
 
 ```ts
 interface SpeedTestServer {
-  id: string;          // unique server identifier; "local" means ws:// instead of wss://
+  id: string;          // unique server identifier; "local" servers without protocols use ws://
   domain: string;      // hostname
   port: number | null; // WebSocket port
   provider: string | null;
@@ -159,7 +159,7 @@ interface SpeedTestServer {
   distance: number | null; // kilometers from client
   isCDN: boolean | null;
   selfHosted?: boolean; // true only for self-hosted servers entered manually; never present in this list
-  protocols?: string[]; // transports and protocol versions, e.g. ["WSSv1", "WSv1", "TCPSv1", "TCPv1"]; absent means ["WSSv1"]
+  protocols?: string[]; // transports and protocol versions, e.g. ["WSSv1", "WSv1", "TCPv1"]; absent means ["WSSv1"]
 }
 ```
 
@@ -191,31 +191,31 @@ The server list is cached in memory for **30 minutes**. The cache is also keyed 
 
 ### WebSocket Endpoint
 
-All measurement stages connect to:
+Every stage connects to one URL on the server's port. Servers built on [`@coveragemap/speed-transport`](https://github.com/CoverageMapLLC/speed-transport) accept all three on the same port:
 
 ```
-wss://<server.domain>:<server.port>/v1/ws
+tcp://<server.domain>:<server.port>          raw TCP            (TCPv1)
+ws://<server.domain>:<server.port>/v1/ws     WebSocket          (WSv1)
+wss://<server.domain>:<server.port>/v1/ws    secure WebSocket   (WSSv1)
 ```
-
-Exception: servers with `id === "local"` use `ws://` (unencrypted) instead of `wss://`. All remote production servers use `wss://`.
 
 The WebSocket `binaryType` is always set to `"arraybuffer"` so binary frames are delivered as `ArrayBuffer` objects.
 
 ### Raw TCP Transport
 
-Servers report the transports they accept in `protocols`: `WSSv1` (secure WebSocket), `WSv1` (WebSocket), `TCPSv1` (raw TCP over TLS), and `TCPv1` (raw TCP), each with the speed test protocol version on it. Servers that report nothing predate the field and are treated as `["WSSv1"]`, and so is the Cloudflare CDN server.
+Servers report the transports they accept in `protocols`: `TCPv1` (raw TCP), `WSv1` (WebSocket), and `WSSv1` (secure WebSocket), each with the speed test protocol version on it. Servers that report nothing predate the field and are treated as `["WSSv1"]` (`["WSv1"]` for servers with `id === "local"`), and so is the Cloudflare CDN server.
 
-In Node.js, with `config.transport` set to `auto` (the default), the engine runs over raw TCP when the server lists `TCPSv1` (`TCPv1` for servers with `id === "local"`), on the same port as WebSocket. Servers built on [`@coveragemap/speed-transport`](https://github.com/CoverageMapLLC/speed-transport) offer it:
+The speed test carries no private data, so encryption only costs CPU. With `config.transport` set to `auto` (the default), the engine picks the fastest transport the server lists:
 
-```
-tcps://<server.domain>:<server.port>     (tcp:// for servers with id === "local")
-```
+1. Raw TCP, in Node.js.
+2. WebSocket, except on HTTPS pages, where browsers only allow secure WebSockets.
+3. Secure WebSocket.
 
-The client opens a TLS connection and sends the 7 byte preamble `STCP/1\n`; the server echoes it. After that both sides exchange RFC 6455 frames without masking and without an HTTP handshake. Every command (`PING`, `START`, `CLOSE`, `ACK`, `PONG`) and every stage below is identical to WebSocket.
+For raw TCP, the client connects and sends the 7 byte preamble `STCP/1\n`; the server echoes it. After that both sides exchange RFC 6455 frames without masking and without an HTTP handshake. Every command (`PING`, `START`, `CLOSE`, `ACK`, `PONG`) and every stage below is identical to WebSocket.
 
-The engine does not check for raw TCP before the run. Instead, the first stage's connection over raw TCP gets 3 seconds to open (TCP, TLS, and the preamble echo). If it is refused or not answered in time, for example on a network that only passes HTTP through a proxy, the engine repeats that stage over WebSocket and runs the rest of the test there. Failures after a connection opened do not switch transports. `transport: 'websocket'` and `transport: 'tcp'` skip all of this and use one transport.
+The engine does not probe the server before the run. Instead, when there is a slower transport to fall back to, the first stage's connection gets 3 seconds to open. If it is refused or not answered in time, for example on a network that only passes HTTPS, the engine repeats that stage over the next transport in the list and runs the rest of the test there. Failures after a connection opened do not switch transports. `transport: 'tcp'`, `'ws'`, and `'wss'` skip all of this and use one transport.
 
-Raw TCP saves the client the WebSocket mask on every uploaded byte and lets it count downloaded frames without copying them. On loopback with TLS it measured 16.8/14.8 Gbps against 11.5/13.9 Gbps for WebSocket, with 37% less client CPU on upload. Browsers cannot open raw TCP connections and always use WebSocket. Results record the transport in `testType.testProtocol` (`TCP` or `WSS`).
+Raw TCP saves the client the WebSocket mask on every uploaded byte and lets it count downloaded frames without copying them. Browsers cannot open raw TCP connections. Results record the transport in `testType.testProtocol` (`TCP`, `WS`, or `WSS`).
 
 ### Browser Worker
 
@@ -785,7 +785,7 @@ await engine.retryQueuedUploads();
 | `latencyTimeoutMs` | 10,000 | 3,000 | 30,000 | Timeout for latency stage (ms) |
 | `estimationTimeoutMs` | 15,000 | 3,000 | 30,000 | Timeout for estimation stages (ms) |
 | `throughputThreads` | 0 | 0 | 64 | Threads for stages estimated at 1 Gbps or more: `0` picks automatically (6), `1` keeps every socket on the calling thread. Node.js only (see [Threads](#threads)) |
-| `transport` | `'auto'` | | | `'auto'`, `'websocket'`, or `'tcp'`. `auto` uses raw TCP in Node.js when the server offers it (see [Raw TCP Transport](#raw-tcp-transport)) |
+| `transport` | `'auto'` | | | `'auto'`, `'tcp'`, `'ws'`, or `'wss'`. `auto` uses raw TCP in Node.js, then WebSocket, then secure WebSocket only where required (see [Raw TCP Transport](#raw-tcp-transport)) |
 | `browserWorker` | `true` | | | In browsers, run the stages in a Web Worker (see [Browser Worker](#browser-worker)). `false` uses the page's main thread |
 
 Override any of these through `SpeedTestEngineOptions.config`:

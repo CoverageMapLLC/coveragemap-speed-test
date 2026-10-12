@@ -223,29 +223,32 @@ export class SpeedTestEngine {
       const selection = await selectServerUrl(targetServer, this.config.transport);
       let serverUrl = selection.primary.url;
       testProtocol = selection.primary.protocol;
-      let fallback = selection.fallback;
+      const fallbacks = [...selection.fallbacks];
       const cancellationToken = this.cancellationToken;
       // In browsers the stages run in a Web Worker, away from the page's rendering.
       runner = await createStageRunner(this.config.browserWorker !== false);
       const stageRunner = runner;
 
       /**
-       * Runs the first stage that connects. If its raw TCP socket cannot open within
-       * FIRST_CONNECTION_TIMEOUT_MS (refused, or a network that only passes HTTP), the rest of
-       * the run switches to the fallback and the stage runs again there.
+       * Runs the first stage that connects. If its socket cannot open within
+       * FIRST_CONNECTION_TIMEOUT_MS (refused, or a network that only passes HTTPS), the rest of
+       * the run switches to the next transport and the stage runs again there: raw TCP, then
+       * plain WebSocket, then secure WebSocket.
        */
       const firstConnection = async <T>(run: (url: string, connectTimeoutMs?: number) => Promise<T>): Promise<T> => {
-        const switchTo = fallback;
-        fallback = null;
-        if (!switchTo) return run(serverUrl);
-        try {
-          return await run(serverUrl, FIRST_CONNECTION_TIMEOUT_MS);
-        } catch (error) {
-          if (!(error instanceof SocketConnectError)) throw error;
-          serverUrl = switchTo.url;
-          testProtocol = switchTo.protocol;
-          return run(serverUrl);
+        while (fallbacks.length > 0) {
+          try {
+            const result = await run(serverUrl, FIRST_CONNECTION_TIMEOUT_MS);
+            fallbacks.length = 0;
+            return result;
+          } catch (error) {
+            if (!(error instanceof SocketConnectError)) throw error;
+            const next = fallbacks.shift()!;
+            serverUrl = next.url;
+            testProtocol = next.protocol;
+          }
         }
+        return run(serverUrl);
       };
 
       const buildStage = async (testStage: string): Promise<NetworkTestResultStage> => {
@@ -686,8 +689,8 @@ function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): Speed
     ['throughputThreads', 0, 64],
   ];
 
-  if (!['auto', 'websocket', 'tcp'].includes(config.transport ?? 'auto')) {
-    throw new Error("SpeedTestEngineOptions.config.transport must be 'auto', 'websocket', or 'tcp'");
+  if (!['auto', 'tcp', 'ws', 'wss'].includes(config.transport ?? 'auto')) {
+    throw new Error("SpeedTestEngineOptions.config.transport must be 'auto', 'tcp', 'ws', or 'wss'");
   }
 
   config.browserWorker = config.browserWorker ?? true;

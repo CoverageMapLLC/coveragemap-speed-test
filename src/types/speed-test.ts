@@ -58,10 +58,12 @@ export interface SpeedTestConfig {
    */
   throughputThreads?: number;
   /**
-   * How sockets connect to the server. `auto` (the default) uses raw TCP in Node.js when the
-   * server supports it, which needs far less client CPU at multi-gigabit speeds, and
-   * WebSocket otherwise. `websocket` always uses WebSocket. `tcp` always uses raw TCP and
-   * fails outside Node.js or against servers without it.
+   * How sockets connect to the server. The speed test carries no private data, so `auto`
+   * (the default) uses the fastest transport the server offers and only encrypts where it
+   * must: raw TCP in Node.js, then plain WebSocket, then secure WebSocket, which browsers
+   * need on HTTPS pages. If the first connection cannot open, the run moves on to the next
+   * transport. `tcp`, `ws`, and `wss` always use that one transport; `tcp` fails outside
+   * Node.js and `ws` fails on HTTPS pages.
    */
   transport?: SpeedTestTransport;
   /**
@@ -74,7 +76,7 @@ export interface SpeedTestConfig {
   browserWorker?: boolean;
 }
 
-export type SpeedTestTransport = 'auto' | 'websocket' | 'tcp';
+export type SpeedTestTransport = 'auto' | 'tcp' | 'ws' | 'wss';
 
 export interface SpeedTestSelection {
   latency?: boolean;

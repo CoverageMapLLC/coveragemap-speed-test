@@ -359,7 +359,7 @@ interface SpeedTestConfig {
   latencyTimeoutMs: number;
   estimationTimeoutMs: number;
   throughputThreads?: number;
-  transport?: 'auto' | 'websocket' | 'tcp';
+  transport?: 'auto' | 'tcp' | 'ws' | 'wss';
   browserWorker?: boolean;
 }
 ```
@@ -373,7 +373,7 @@ interface SpeedTestConfig {
 | `latencyTimeoutMs` | `number` | `10000` | 3000 – 30000 | Maximum time allowed for the latency stage to collect sufficient probe responses. The stage fails if this window is exceeded. |
 | `estimationTimeoutMs` | `number` | `15000` | 3000 – 30000 | Maximum time allowed for download and upload estimation phases. Prevents the run from hanging during pre-throughput sizing. |
 | `throughputThreads` | `number` | `0` | 0 – 64 | Threads the download and upload stages spread their sockets across when the estimate is 1 Gbps or more. `0` picks automatically (6), `1` keeps every socket on the calling thread. Extra threads are Node.js worker threads, used only with Node's built-in `WebSocket` (or raw TCP) and never more than half the CPU cores; browsers ignore it. |
-| `transport` | `string` | `'auto'` | `auto`, `websocket`, `tcp` | How sockets connect. `auto` uses [raw TCP](./protocol.md#raw-tcp-transport) in Node.js when the server's `protocols` list it, and WebSocket otherwise or when the first raw TCP connection cannot open within 3 seconds. Raw TCP needs far less client CPU at multi-gigabit speeds. `websocket` always uses WebSocket. `tcp` always uses raw TCP and fails in browsers. |
+| `transport` | `string` | `'auto'` | `auto`, `tcp`, `ws`, `wss` | How sockets connect. The speed test carries no private data, so `auto` uses the fastest transport the server's `protocols` list and only encrypts where it must: [raw TCP](./protocol.md#raw-tcp-transport) in Node.js, then plain WebSocket, then secure WebSocket, which browsers need on HTTPS pages. If the first connection cannot open within 3 seconds, the run moves on to the next one. Raw TCP needs far less client CPU at multi-gigabit speeds. `tcp`, `ws`, and `wss` always use that one transport; `tcp` fails in browsers and `ws` fails on HTTPS pages. |
 | `browserWorker` | `boolean` | `true` | `true`, `false` | In browsers, runs every stage's sockets and timing in a dedicated Web Worker, so the page's own work (rendering progress, for example) cannot lower the measured speeds or inflate latency. The worker is embedded in the library and started from a `blob:` URL, so no bundler setup is needed. Where it cannot start (a Content Security Policy without `worker-src blob:`, no `Worker` support) or the page installed its own `WebSocket`, the test runs on the main thread. `false` always uses the main thread. Ignored outside browsers. See [Browser Worker](./protocol.md#browser-worker). |
 
 ---
@@ -770,7 +770,7 @@ Premium servers are automatically filtered out by the client before the list is 
 | `longitude` | `number \| null` | Geographic longitude. |
 | `distance` | `number \| null` | Distance from the requesting client in kilometers, when available. |
 | `isCDN` | `boolean \| null` | Whether the server is CDN-backed. |
-| `protocols` | `string[]` *(optional)* | Transports the server accepts with the speed test protocol version on each: `WSSv1`, `WSv1`, `TCPSv1`, `TCPv1`. Absent for servers that predate the field, which are treated as `["WSSv1"]`. `config.transport: 'auto'` uses raw TCP only when it is listed. |
+| `protocols` | `string[]` *(optional)* | Transports the server accepts with the speed test protocol version on each: `TCPv1` (raw TCP), `WSv1` (WebSocket), `WSSv1` (secure WebSocket). Absent for servers that predate the field, which are treated as `["WSSv1"]` (`["WSv1"]` when `id` is `"local"`). `config.transport: 'auto'` only uses transports that are listed. |
 | `selfHosted` | `boolean` *(optional)* | `true` for a self-hosted server the user entered manually. Absent for CoverageMap network servers. Results upload to CoverageMap but are not mapped when this flag is present. |
 
 #### `getServerWsUrl(server)`
@@ -1093,7 +1093,7 @@ interface NetworkTestResultTestType {
 | `sessionId` | `string` | Session identifier grouping related runs. |
 | `type` | `TestTypeSingleMultiple` | Whether this is a single or multi-connection test. |
 | `tag` | `LocationTag` | Location context tag. |
-| `testProtocol` | `string` | Transport used: `'WSS'` for WebSocket, `'TCP'` for raw TCP. |
+| `testProtocol` | `string` | Transport used: `'TCP'` for raw TCP, `'WS'` for WebSocket, `'WSS'` for secure WebSocket. |
 | `testIndex` | `number \| null` | Index within a sequence of runs. |
 | `testCount` | `number \| null` | Total number of runs in the sequence. |
 | `downloadDurationMs` | `number \| null` | Configured download duration. |

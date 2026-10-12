@@ -92,7 +92,7 @@ describe('engine stage runner', () => {
     const uploads: number[] = [];
     const engine = new SpeedTestEngine({
       application,
-      config: { transport: 'websocket' },
+      config: { transport: 'wss' },
       callbacks: {
         onLatencyPing: (ms) => pings.push(ms),
         onDownloadProgress: (snapshot) => downloads.push(snapshot.speedMbps),
@@ -124,7 +124,7 @@ describe('engine stage runner', () => {
 
   it('asks for the calling thread when browserWorker is false', async () => {
     mocks.createStageRunner.mockResolvedValue(scriptedRunner());
-    const engine = new SpeedTestEngine({ application, config: { transport: 'websocket', browserWorker: false } });
+    const engine = new SpeedTestEngine({ application, config: { transport: 'wss', browserWorker: false } });
     await engine.run(server);
     expect(mocks.createStageRunner).toHaveBeenCalledWith(false);
   });
@@ -133,7 +133,7 @@ describe('engine stage runner', () => {
     const runner = scriptedRunner();
     (runner.runUploadSpeedTest as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('The speed test worker failed: crashed'));
     mocks.createStageRunner.mockResolvedValue(runner);
-    const engine = new SpeedTestEngine({ application, config: { transport: 'websocket' } });
+    const engine = new SpeedTestEngine({ application, config: { transport: 'wss' } });
 
     const result = await engine.run(server);
 
@@ -146,7 +146,7 @@ describe('engine stage runner', () => {
   it('closes the runner when the run is cancelled', async () => {
     const runner = scriptedRunner();
     mocks.createStageRunner.mockResolvedValue(runner);
-    const engine = new SpeedTestEngine({ application, config: { transport: 'websocket' } });
+    const engine = new SpeedTestEngine({ application, config: { transport: 'wss' } });
     (runner.runDownloadSpeedTest as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       engine.cancel();
       const { CancellationError } = await import('../src/utils/cancellation.js');
@@ -163,7 +163,7 @@ describe('engine stage runner', () => {
     const first = scriptedRunner();
     const second = scriptedRunner();
     mocks.createStageRunner.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
-    const engine = new SpeedTestEngine({ application, config: { transport: 'websocket' } });
+    const engine = new SpeedTestEngine({ application, config: { transport: 'wss' } });
     await engine.run(server);
     await engine.run(server);
     expect(first.close).toHaveBeenCalledTimes(1);

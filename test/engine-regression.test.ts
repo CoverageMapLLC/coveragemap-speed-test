@@ -490,7 +490,7 @@ describe('engine regression', () => {
           application: applicationMetadata,
           config: { transport: 'quic' as never },
         })
-    ).toThrow("SpeedTestEngineOptions.config.transport must be 'auto', 'websocket', or 'tcp'");
+    ).toThrow("SpeedTestEngineOptions.config.transport must be 'auto', 'tcp', 'ws', or 'wss'");
   });
 
   it('rejects invalid tests selection with no enabled tests', async () => {
