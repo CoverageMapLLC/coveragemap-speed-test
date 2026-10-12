@@ -171,7 +171,7 @@ Frequently used fields:
 - `type`: currently `single`
 - `testsRun`: flags indicating which of the three test phases (latency, download, upload) were enabled for this run
 - `downloadTestDuration` and `uploadTestDuration`: `null` when the corresponding test was not enabled
-- `testProtocol`: currently `WSS`
+- `testProtocol`: the transport the stages ran over: `TCP` (raw TCP, Node.js only), `WS` (WebSocket), or `WSS` (secure WebSocket, used on HTTPS pages and for servers that offer nothing else). See `config.transport`
 - `downloadConnectionCount` and `uploadConnectionCount`: `null` when the corresponding test was not enabled or did not reach the estimation phase
 - `downloadPacketSize` and `uploadPacketSize`: `null` when the corresponding test was not enabled or did not reach the estimation phase
 
@@ -212,10 +212,13 @@ interface SpeedTestServer {
   distance: number | null;
   isCDN: boolean | null;
   selfHosted?: boolean;
+  protocols?: string[];
 }
 ```
 
 `selfHosted` is `true` when the test ran against a self-hosted server that the user entered manually. CoverageMap stores those results but never maps them.
+
+`protocols` lists the transports the server reported, each with the speed test protocol version on it: `TCPv1`, `WSv1`, `WSSv1`. It is absent for servers that predate the field, which only support `WSSv1`. The transport the test actually used is `testType.testProtocol`.
 
 ### `results.location`
 

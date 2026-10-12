@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { formatMbps, formatMs } from './formatters';
 import { selectTestSummary, type TestSummaryMetrics } from './test-summary-metrics';
 
@@ -23,7 +24,7 @@ type TestSummaryProps = {
   isRunning?: boolean;
 };
 
-export function TestSummary({ metrics, isRunning = false }: TestSummaryProps) {
+function TestSummaryView({ metrics, isRunning = false }: TestSummaryProps) {
   return (
     <section className="card test-summary">
       <div className="metrics-header">
@@ -71,3 +72,5 @@ export function TestSummary({ metrics, isRunning = false }: TestSummaryProps) {
     </section>
   );
 }
+
+export const TestSummary = memo(TestSummaryView);

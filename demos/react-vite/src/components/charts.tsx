@@ -145,6 +145,9 @@ export function LineChart({
                 strokeWidth={2.5}
                 dot={{ r: 2.5, fill: color, stroke: '#0b1220', strokeWidth: 1.5 }}
                 activeDot={{ r: 4, fill: color, stroke: '#0b1220', strokeWidth: 1.5 }}
+                // Live charts change ten times a second; animating every change costs more
+                // than it shows.
+                isAnimationActive={false}
               />
             </AreaChart>
           </ResponsiveContainer>
@@ -201,7 +204,7 @@ export function BarChart({
                   />
                 }
               />
-              <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={28} />
+              <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
             </RechartsBarChart>
           </ResponsiveContainer>
         </div>
