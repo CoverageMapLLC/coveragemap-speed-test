@@ -1,6 +1,7 @@
 import type { SpeedEstimationResult } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
+import { createStallMonitor } from '../utils/stall-monitor.js';
 import { SOCKET_CLOSED, openSocket } from './sockets.js';
 
 export interface DownloadEstimationTestOptions {
@@ -15,6 +16,8 @@ const TARGET_DURATION_MS = 100;
 const MAX_MESSAGE_SIZE_BYTES = 5 * 1024 * 1024;
 const WARMUP_SIZE = 512;
 const MAX_RETRIES = 3;
+/** Times a round that ran while the thread was blocked is repeated before it is used. */
+export const MAX_STALLED_ROUND_REPEATS = 3;
 
 export async function runDownloadEstimationTest(
   options: DownloadEstimationTestOptions
@@ -30,8 +33,12 @@ export async function runDownloadEstimationTest(
     let settled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
+    let stalledRepeats = 0;
+    const stallMonitor = createStallMonitor();
+
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
+      stallMonitor.stop();
       try {
         if (socket && socket.readyState !== SOCKET_CLOSED) socket.close();
       } catch {
@@ -64,6 +71,7 @@ export async function runDownloadEstimationTest(
       const messageSizeKb = Math.floor(messageSizeBytes / 1024);
       socket.send(`START ${messageSizeKb} 1`);
       startTime = performance.now();
+      stallMonitor.reset();
     };
 
     try {
@@ -94,6 +102,16 @@ export async function runDownloadEstimationTest(
 
       if (adjustedMs < TARGET_DURATION_MS && messageSizeBytes < MAX_MESSAGE_SIZE_BYTES) {
         messageSizeBytes *= 2;
+        runTest();
+        return;
+      }
+
+      // A slow round ends the estimation, so check that the network was what made it slow.
+      // If the thread was blocked (an application rendering between stages, for example),
+      // the message was handled late: repeat the same size rather than settle on a far too
+      // small estimate.
+      if (stallMonitor.stalled() && stalledRepeats < MAX_STALLED_ROUND_REPEATS) {
+        stalledRepeats++;
         runTest();
         return;
       }
