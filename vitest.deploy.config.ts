@@ -6,6 +6,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['deploy-tests/**/*.test.ts'],
+    globalSetup: ['./test/global-setup.ts'],
     testTimeout: deployTimeoutMs,
     hookTimeout: deployTimeoutMs,
     restoreMocks: true,

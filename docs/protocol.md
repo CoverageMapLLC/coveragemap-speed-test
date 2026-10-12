@@ -16,6 +16,8 @@ This document is the authoritative reference for the transport protocol, measure
   - [Server Caching](#server-caching)
 - [Phase 2: WebSocket Measurement](#phase-2-websocket-measurement)
   - [WebSocket Endpoint](#websocket-endpoint)
+  - [Raw TCP Transport](#raw-tcp-transport)
+  - [Browser Worker](#browser-worker)
   - [Stage Sequence](#stage-sequence)
   - [Stage 1 — Latency](#stage-1--latency)
   - [Stage 2 — Download Estimation](#stage-2--download-estimation)
@@ -215,6 +217,21 @@ The engine does not check for raw TCP before the run. Instead, the first stage's
 
 Raw TCP saves the client the WebSocket mask on every uploaded byte and lets it count downloaded frames without copying them. On loopback with TLS it measured 16.8/14.8 Gbps against 11.5/13.9 Gbps for WebSocket, with 37% less client CPU on upload. Browsers cannot open raw TCP connections and always use WebSocket. Results record the transport in `testType.testProtocol` (`TCP` or `WSS`).
 
+### Browser Worker
+
+In a browser, the page's main thread also renders the page and runs the application. While it is busy, socket events and timers wait: snapshots and acknowledgements arrive late, uploads are refilled late, and pings look slower. A page that redraws charts on every progress callback can measure far below the link's speed.
+
+So in browsers the engine runs every stage (latency, both estimations, download, upload, and the loaded latency monitor) in a dedicated Web Worker, unless `config.browserWorker` is `false`. The engine stays on the main thread and talks to the worker by message: it sends each stage's options and a cancel message, and receives pings, snapshots, results, and errors. Timing happens inside the worker, so it does not depend on the page. Callbacks still run on the main thread, so a busy page may show progress a little late, but the numbers are not affected.
+
+The worker script is built into the library and started from a `blob:` URL. It needs no bundler configuration or extra file. The engine falls back to the main thread, with the same results as before, when:
+
+- the browser refuses the worker, for example because the page's Content Security Policy does not allow `blob:` workers (`worker-src blob:`, or `child-src` / `script-src` when `worker-src` is not set);
+- the runtime has no `Worker`, `Blob`, or `URL.createObjectURL`, or the worker has no `WebSocket`;
+- the worker does not report ready within 3 seconds;
+- the page installed its own `WebSocket` implementation, which the worker would not use.
+
+If the worker fails after it started, the stage in progress fails and later stages run on the main thread. A new worker is started for each run and stopped when it ends.
+
 ### Stage Sequence
 
 A full test run executes five stages in order. Each stage uses one or more short-lived WebSocket connections that are closed when the stage completes.
@@ -357,6 +374,9 @@ loop:
   if adjustedMs < 100ms AND messageSizeBytes < 5 MB:
     messageSizeBytes *= 2
     continue
+  else if the thread was blocked for > 50 ms during this round AND repeats < 3:
+    repeats += 1
+    continue                                  (same size again)
   else:
     durationMs = max(adjustedMs, 1)
     speedMbps = bytes / (durationMs * 125)
@@ -364,6 +384,8 @@ loop:
 ```
 
 The doubling ensures that the estimation converges to a duration around 100 ms, giving a reliable throughput sample regardless of whether the connection is 1 Mbps or 1 Gbps.
+
+A slow round only ends the estimation if the network made it slow. A heartbeat timer runs every 10 ms during each round; if one arrives more than 50 ms late, the thread was blocked (an application rendering between stages, for example), so the message was handled late and the round's timing is not the network's. Such a round is repeated at the same size, up to 3 times, before it is used. Without this, a page that rendered for a few hundred milliseconds right after a stage could make a gigabit link estimate below 1 Mbps and run the next stage on one socket of 1 KB messages. Upload estimation does the same.
 
 #### Error Recovery
 
@@ -427,7 +449,7 @@ When the stage ends, each download socket sends the text command `CLOSE` before 
 
 #### Threads
 
-A single JavaScript thread cannot receive or send much more than about 5 Gbps over TLS. When the estimate is 1 Gbps or more (the single socket estimate tops out at a few Gbps however fast the link is), Node.js spreads the sockets across worker threads: 6 when `config.throughputThreads` is `0` (its default, which picks the count automatically), two sockets each, and never more than half the CPU cores. Each worker runs the same standard WebSocket code and publishes its byte count through a `SharedArrayBuffer`, so the main thread's snapshots stay real time. Worker threads are only used when their built-in `WebSocket` is the same implementation as the application's, so an application that installs a polyfill such as `ws` keeps every socket on the calling thread. Raw TCP lanes skip that check, since they do not depend on the global `WebSocket`, so they can use worker threads on every Node.js version; below 1 Gbps or with `throughputThreads: 1` they stay on the calling thread like WebSocket lanes. Browsers always use the calling thread.
+A single JavaScript thread cannot receive or send much more than about 5 Gbps over TLS. When the estimate is 1 Gbps or more (the single socket estimate tops out at a few Gbps however fast the link is), Node.js spreads the sockets across worker threads: 6 when `config.throughputThreads` is `0` (its default, which picks the count automatically), two sockets each, and never more than half the CPU cores. Each worker runs the same standard WebSocket code and publishes its byte count through a `SharedArrayBuffer`, so the main thread's snapshots stay real time. Worker threads are only used when their built-in `WebSocket` is the same implementation as the application's, so an application that installs a polyfill such as `ws` keeps every socket on the calling thread. Raw TCP lanes skip that check, since they do not depend on the global `WebSocket`, so they can use worker threads on every Node.js version; below 1 Gbps or with `throughputThreads: 1` they stay on the calling thread like WebSocket lanes. In browsers every socket of a stage runs on one thread: the [browser worker](#browser-worker), or the page's main thread when it is off or cannot start.
 
 #### Measurement Model
 
@@ -523,6 +545,9 @@ loop:
   if adjustedMs < 100ms AND bytes < 5 MB:
     bytes *= 2
     continue
+  else if the thread was blocked for > 50 ms during this round AND repeats < 3:
+    repeats += 1
+    continue                                  (same size again)
   else:
     durationMs = max(adjustedMs, 1)
     speedMbps = bytes / (durationMs * 125)
@@ -761,6 +786,7 @@ await engine.retryQueuedUploads();
 | `estimationTimeoutMs` | 15,000 | 3,000 | 30,000 | Timeout for estimation stages (ms) |
 | `throughputThreads` | 0 | 0 | 64 | Threads for stages estimated at 1 Gbps or more: `0` picks automatically (6), `1` keeps every socket on the calling thread. Node.js only (see [Threads](#threads)) |
 | `transport` | `'auto'` | | | `'auto'`, `'websocket'`, or `'tcp'`. `auto` uses raw TCP in Node.js when the server offers it (see [Raw TCP Transport](#raw-tcp-transport)) |
+| `browserWorker` | `true` | | | In browsers, run the stages in a Web Worker (see [Browser Worker](#browser-worker)). `false` uses the page's main thread |
 
 Override any of these through `SpeedTestEngineOptions.config`:
 

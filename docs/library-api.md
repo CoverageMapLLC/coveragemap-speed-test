@@ -360,6 +360,7 @@ interface SpeedTestConfig {
   estimationTimeoutMs: number;
   throughputThreads?: number;
   transport?: 'auto' | 'websocket' | 'tcp';
+  browserWorker?: boolean;
 }
 ```
 
@@ -373,6 +374,7 @@ interface SpeedTestConfig {
 | `estimationTimeoutMs` | `number` | `15000` | 3000 – 30000 | Maximum time allowed for download and upload estimation phases. Prevents the run from hanging during pre-throughput sizing. |
 | `throughputThreads` | `number` | `0` | 0 – 64 | Threads the download and upload stages spread their sockets across when the estimate is 1 Gbps or more. `0` picks automatically (6), `1` keeps every socket on the calling thread. Extra threads are Node.js worker threads, used only with Node's built-in `WebSocket` (or raw TCP) and never more than half the CPU cores; browsers ignore it. |
 | `transport` | `string` | `'auto'` | `auto`, `websocket`, `tcp` | How sockets connect. `auto` uses [raw TCP](./protocol.md#raw-tcp-transport) in Node.js when the server's `protocols` list it, and WebSocket otherwise or when the first raw TCP connection cannot open within 3 seconds. Raw TCP needs far less client CPU at multi-gigabit speeds. `websocket` always uses WebSocket. `tcp` always uses raw TCP and fails in browsers. |
+| `browserWorker` | `boolean` | `true` | `true`, `false` | In browsers, runs every stage's sockets and timing in a dedicated Web Worker, so the page's own work (rendering progress, for example) cannot lower the measured speeds or inflate latency. The worker is embedded in the library and started from a `blob:` URL, so no bundler setup is needed. Where it cannot start (a Content Security Policy without `worker-src blob:`, no `Worker` support) or the page installed its own `WebSocket`, the test runs on the main thread. `false` always uses the main thread. Ignored outside browsers. See [Browser Worker](./protocol.md#browser-worker). |
 
 ---
 

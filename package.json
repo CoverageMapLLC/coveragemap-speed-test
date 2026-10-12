@@ -18,11 +18,17 @@
   ],
   "sideEffects": false,
   "scripts": {
+    "build:worker": "node scripts/build-stage-worker.mjs",
+    "prebuild": "npm run build:worker",
     "build": "tsc -p tsconfig.build.json",
+    "predev": "npm run build:worker",
     "dev": "tsc --watch -p tsconfig.build.json",
+    "pretypecheck": "npm run build:worker",
     "typecheck": "tsc --noEmit",
+    "prelint": "npm run build:worker",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:deploy": "vitest run --config vitest.deploy.config.ts",
     "test:watch": "vitest",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build"
@@ -56,8 +62,10 @@
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.32.1",
     "@typescript-eslint/parser": "^8.32.1",
+    "esbuild": "^0.27.7",
     "eslint": "^9.26.0",
     "jsdom": "^26.1.0",
+    "playwright-core": "^1.64.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.3",
     "ws": "^8.20.0"

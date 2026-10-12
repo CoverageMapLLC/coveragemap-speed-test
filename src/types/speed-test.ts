@@ -64,6 +64,14 @@ export interface SpeedTestConfig {
    * fails outside Node.js or against servers without it.
    */
   transport?: SpeedTestTransport;
+  /**
+   * In browsers, run the test's sockets and timing in a dedicated Web Worker (the default)
+   * so the page's own work, such as rendering progress, cannot slow the measurement or
+   * inflate latency. The worker starts from a `blob:` URL; where it cannot start (for
+   * example a Content Security Policy without `worker-src blob:`) the test runs on the
+   * page's main thread. `false` always uses the main thread. Ignored outside browsers.
+   */
+  browserWorker?: boolean;
 }
 
 export type SpeedTestTransport = 'auto' | 'websocket' | 'tcp';
@@ -83,6 +91,7 @@ export const DEFAULT_CONFIG: SpeedTestConfig = {
   estimationTimeoutMs: 15000,
   throughputThreads: 0,
   transport: 'auto',
+  browserWorker: true,
 };
 
 export interface SpeedTestCallbacks {

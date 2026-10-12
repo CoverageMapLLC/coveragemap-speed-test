@@ -51,12 +51,9 @@ import {
   resolveSpeedTestNetwork,
   type ResolvedSpeedTestNetwork,
 } from './utils/network-provider.js';
-import { runLatencyTest } from './tests/latency-test.js';
 import { FIRST_CONNECTION_TIMEOUT_MS, SocketConnectError, selectServerUrl } from './tests/sockets.js';
-import { runDownloadEstimationTest } from './tests/download-estimation-test.js';
-import { runUploadEstimationTest } from './tests/upload-estimation-test.js';
-import { runDownloadSpeedTest } from './tests/download-speed-test.js';
-import { runUploadSpeedTest } from './tests/upload-speed-test.js';
+import { createStageRunner } from './browser/stage-worker-client.js';
+import type { StageRunner } from './browser/stage-runner.js';
 import { roundTo3Decimals } from './utils/speed.js';
 import type { ApiBaseUrlOverrides } from './api/config.js';
 import { SpeedTestApiClient } from './api/speed-api.js';
@@ -210,6 +207,7 @@ export class SpeedTestEngine {
     let connectionInfo: ConnectionInfo | null = null;
     let location: NetworkTestResultLocation | null = null;
     let lastLocation: NetworkTestResultLocation | null = null;
+    let runner: StageRunner | null = null;
 
     try {
       connectionInfo = await this.getConnectionInfo();
@@ -227,6 +225,9 @@ export class SpeedTestEngine {
       testProtocol = selection.primary.protocol;
       let fallback = selection.fallback;
       const cancellationToken = this.cancellationToken;
+      // In browsers the stages run in a Web Worker, away from the page's rendering.
+      runner = await createStageRunner(this.config.browserWorker !== false);
+      const stageRunner = runner;
 
       /**
        * Runs the first stage that connects. If its raw TCP socket cannot open within
@@ -272,7 +273,7 @@ export class SpeedTestEngine {
           this.setStage('latency');
           stages.push(await buildStage('latencyStart'));
           latencyData = await firstConnection((url, connectTimeoutMs) =>
-            runLatencyTest({
+            stageRunner.runLatencyTest({
               serverUrl: url,
               pingCount: this.config.pingCount,
               timeoutMs: this.config.latencyTimeoutMs,
@@ -284,7 +285,7 @@ export class SpeedTestEngine {
           this.callbacks.onLatencyResult?.(latencyData);
         } else if (this.tests.download || this.tests.upload) {
           latencyData = await firstConnection((url, connectTimeoutMs) =>
-            runLatencyTest({
+            stageRunner.runLatencyTest({
               serverUrl: url,
               pingCount: 1,
               connectTimeoutMs,
@@ -299,7 +300,7 @@ export class SpeedTestEngine {
         if (this.tests.download) {
           this.setStage('downloadEstimation');
           stages.push(await buildStage('downloadStart'));
-          downloadEstimation = await runDownloadEstimationTest({
+          downloadEstimation = await stageRunner.runDownloadEstimationTest({
             serverUrl,
             latencyMs,
             jitterMs,
@@ -309,7 +310,7 @@ export class SpeedTestEngine {
           this.setStage('download');
           downloadMessageSizeKb = getDownloadMessageSizeKb(downloadEstimation.speedMbps);
           downloadConnectionCount = getDownloadConnectionCount(downloadEstimation.speedMbps);
-          downloadResult = await runDownloadSpeedTest({
+          downloadResult = await stageRunner.runDownloadSpeedTest({
             serverUrl,
             messageSizeKb: downloadMessageSizeKb,
             connectionCount: downloadConnectionCount,
@@ -335,7 +336,7 @@ export class SpeedTestEngine {
 
           this.setStage('uploadEstimation');
           stages.push(await buildStage('uploadStart'));
-          uploadEstimation = await runUploadEstimationTest({
+          uploadEstimation = await stageRunner.runUploadEstimationTest({
             serverUrl,
             latencyMs,
             jitterMs,
@@ -345,7 +346,7 @@ export class SpeedTestEngine {
           this.setStage('upload');
           uploadMessageSizeKb = getUploadMessageSizeKb(uploadEstimation.speedMbps);
           uploadConnectionCount = getUploadConnectionCount(uploadEstimation.speedMbps);
-          uploadResult = await runUploadSpeedTest({
+          uploadResult = await stageRunner.runUploadSpeedTest({
             serverUrl,
             messageSizeKb: uploadMessageSizeKb,
             connectionCount: uploadConnectionCount,
@@ -410,6 +411,7 @@ export class SpeedTestEngine {
       }
       return testResults;
     } finally {
+      runner?.close();
       this._isRunning = false;
       this.cancellationToken = null;
     }
@@ -674,7 +676,7 @@ function normalizeAndValidateApplicationInfo(
 function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): SpeedTestConfig {
   const config = { ...DEFAULT_CONFIG, ...overrides };
 
-  const rules: Array<[Exclude<keyof SpeedTestConfig, 'transport'>, number, number]> = [
+  const rules: Array<[Exclude<keyof SpeedTestConfig, 'transport' | 'browserWorker'>, number, number]> = [
     ['pingCount', 5, 50],
     ['downloadDurationMs', 3000, 30000],
     ['uploadDurationMs', 3000, 30000],
@@ -686,6 +688,11 @@ function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): Speed
 
   if (!['auto', 'websocket', 'tcp'].includes(config.transport ?? 'auto')) {
     throw new Error("SpeedTestEngineOptions.config.transport must be 'auto', 'websocket', or 'tcp'");
+  }
+
+  config.browserWorker = config.browserWorker ?? true;
+  if (typeof config.browserWorker !== 'boolean') {
+    throw new Error('SpeedTestEngineOptions.config.browserWorker must be a boolean');
   }
 
   for (const [field, min, max] of rules) {
