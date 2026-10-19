@@ -4,7 +4,7 @@
     "owner": "CoverageMapLLC",
     "name": "coveragemap-speed-test"
   },
-  "updatedAt": "2026-09-06T20:12:05.508Z",
+  "updatedAt": "2026-10-19T17:56:00.390Z",
   "config": {
     "name": "Speed Testing NPM Library",
     "description": "A JavaScript Speed Test library leveraging the CoverageMap Speed Test system and infrastructure",
@@ -30,6 +30,8 @@
         "repository": "CoverageMapLLC/speed-testing",
         "note": "Manages the entire speed testing protocol, network, and servers"
       }
-    ]
+    ],
+    "icon": "wifi",
+    "color": "yellow"
   }
 }
