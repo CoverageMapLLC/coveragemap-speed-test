@@ -6,5 +6,6 @@
     "noEmit": false,
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/browser/stage-worker-entry.ts"]
 }

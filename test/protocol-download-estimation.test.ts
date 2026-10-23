@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runDownloadEstimationTest } from '../src/tests/download-estimation-test.js';
+import { MAX_STALLED_ROUND_REPEATS, runDownloadEstimationTest } from '../src/tests/download-estimation-test.js';
 import { CancellationToken } from '../src/utils/cancellation.js';
+import { blockThread } from './helpers/block-thread.js';
 
 class DownloadEstimationSocketMock {
   static CONNECTING = 0;
@@ -119,5 +120,73 @@ describe('download estimation protocol', () => {
         cancellationToken: new CancellationToken(),
       })
     ).rejects.toThrow('Download estimation timed out');
+  });
+});
+
+describe('download estimation when the thread stalls', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * A socket that answers every START with one binary message on a later tick. `beforeReply`
+   * runs first for each round (counted from 1) and can block the thread or ask for a delay.
+   */
+  function socketWith(beforeReply: (round: number) => number | void) {
+    const rounds = { count: 0 };
+    class ScriptedSocket extends DownloadEstimationSocketMock {
+      send(payload: string | Uint8Array): void {
+        if (typeof payload !== 'string' || !payload.startsWith('START')) return;
+        const round = ++rounds.count;
+        const bytes = Number(payload.split(' ')[1]) * 1024;
+        setTimeout(() => {
+          const delayMs = beforeReply(round) ?? 0;
+          setTimeout(() => this.onmessage?.({ data: new ArrayBuffer(bytes) } as MessageEvent), delayMs);
+        }, 0);
+      }
+    }
+    vi.stubGlobal('WebSocket', ScriptedSocket as unknown as typeof WebSocket);
+    return rounds;
+  }
+
+  const run = () =>
+    runDownloadEstimationTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      latencyMs: 1,
+      jitterMs: 0,
+      cancellationToken: new CancellationToken(),
+    });
+
+  it('repeats a round the thread was blocked through instead of settling on it', async () => {
+    let blocked = false;
+    socketWith((round) => {
+      if (round === 1 && !blocked) {
+        blocked = true;
+        blockThread(150);
+      }
+    });
+
+    const result = await run();
+    // Without the repeat the 150 ms block would end the estimation at the first 10 KB round.
+    expect(result.bytes).toBeGreaterThan(10 * 1024);
+  });
+
+  it('still settles on the first slow round when the network is what is slow', async () => {
+    const rounds = socketWith(() => 150);
+
+    const result = await run();
+    expect(result.bytes).toBe(10 * 1024);
+    expect(rounds.count).toBe(1);
+    expect(result.speedMbps).toBeLessThan(1);
+  });
+
+  it('settles after a bounded number of repeats when every round stalls', async () => {
+    const rounds = socketWith(() => {
+      blockThread(120);
+    });
+
+    const result = await run();
+    expect(result.bytes).toBe(10 * 1024);
+    expect(rounds.count).toBe(1 + MAX_STALLED_ROUND_REPEATS);
   });
 });

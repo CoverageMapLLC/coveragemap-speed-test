@@ -1,17 +1,20 @@
 import type { LatencyTestData } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { roundTo3Decimals } from '../utils/speed.js';
+import { SOCKET_CLOSED, SocketConnectError, openSocket } from './sockets.js';
 
 export interface LatencyTestOptions {
   serverUrl: string;
   pingCount: number;
   timeoutMs?: number;
+  /** How long the socket may take to open before the stage fails with a SocketConnectError. */
+  connectTimeoutMs?: number;
   cancellationToken: CancellationToken;
   onPing?: (latencyMs: number, index: number) => void;
 }
 
 export async function runLatencyTest(options: LatencyTestOptions): Promise<LatencyTestData> {
-  const { serverUrl, pingCount, timeoutMs = 10000, cancellationToken, onPing } = options;
+  const { serverUrl, pingCount, timeoutMs = 10000, connectTimeoutMs, cancellationToken, onPing } = options;
 
   return new Promise<LatencyTestData>((resolve, reject) => {
     let socket: WebSocket;
@@ -20,11 +23,13 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
     let pingStartTime: number | null = null;
     let didConnect = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let connectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
+      if (connectTimer) clearTimeout(connectTimer);
       try {
-        if (socket && socket.readyState !== WebSocket.CLOSED) {
+        if (socket && socket.readyState !== SOCKET_CLOSED) {
           socket.close();
         }
       } catch {
@@ -67,16 +72,13 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
         complete();
       } else {
         cleanup();
-        reject(
-          new Error(
-            `Latency test timed out after ${timeoutMs}ms. Connected: ${didConnect}, Pings sent: ${sentPings}`
-          )
-        );
+        const message = `Latency test timed out after ${timeoutMs}ms. Connected: ${didConnect}, Pings sent: ${sentPings}`;
+        reject(didConnect ? new Error(message) : new SocketConnectError(message));
       }
     }, timeoutMs);
 
     try {
-      socket = new WebSocket(serverUrl);
+      socket = openSocket(serverUrl, { connectTimeoutMs });
       socket.binaryType = 'arraybuffer';
     } catch (error) {
       cleanup();
@@ -84,8 +86,19 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
       return;
     }
 
+    if (connectTimeoutMs) {
+      // A WebSocket has no connect timeout of its own: a network that drops the connection
+      // would otherwise hold the run until the latency timeout.
+      connectTimer = setTimeout(() => {
+        if (didConnect) return;
+        cleanup();
+        reject(new SocketConnectError(`Connection not open after ${connectTimeoutMs}ms`));
+      }, connectTimeoutMs);
+    }
+
     socket.onopen = () => {
       didConnect = true;
+      if (connectTimer) clearTimeout(connectTimer);
       sendPing();
     };
 
@@ -109,7 +122,12 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
 
     socket.onerror = () => {
       cleanup();
-      reject(new Error('WebSocket error during latency test'));
+      // Failing before the socket opened means the server could not be reached this way.
+      reject(
+        didConnect
+          ? new Error('WebSocket error during latency test')
+          : new SocketConnectError('WebSocket connection failed during latency test')
+      );
     };
 
     socket.onclose = () => {
