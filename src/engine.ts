@@ -29,8 +29,8 @@ import {
   getDownloadConnectionCount,
   getUploadMessageSizeKb,
   getUploadConnectionCount,
+  getThroughputThreadCount,
 } from './types/speed-test.js';
-import { getServerWsUrl } from './types/speed-server.js';
 import { CancellationToken, CancellationError } from './utils/cancellation.js';
 import {
   DOCUMENTED_DEMO_APPLICATION_UUID,
@@ -51,11 +51,9 @@ import {
   resolveSpeedTestNetwork,
   type ResolvedSpeedTestNetwork,
 } from './utils/network-provider.js';
-import { runLatencyTest } from './tests/latency-test.js';
-import { runDownloadEstimationTest } from './tests/download-estimation-test.js';
-import { runUploadEstimationTest } from './tests/upload-estimation-test.js';
-import { runDownloadSpeedTest } from './tests/download-speed-test.js';
-import { runUploadSpeedTest } from './tests/upload-speed-test.js';
+import { FIRST_CONNECTION_TIMEOUT_MS, SocketConnectError, selectServerUrl } from './tests/sockets.js';
+import { createStageRunner } from './browser/stage-worker-client.js';
+import type { StageRunner } from './browser/stage-runner.js';
 import { roundTo3Decimals } from './utils/speed.js';
 import type { ApiBaseUrlOverrides } from './api/config.js';
 import { SpeedTestApiClient } from './api/speed-api.js';
@@ -204,10 +202,12 @@ export class SpeedTestEngine {
     let failedReason: string | null = null;
     let failedStage: string | null = null;
     let wasCancelled = false;
+    let testProtocol = 'WSS';
 
     let connectionInfo: ConnectionInfo | null = null;
     let location: NetworkTestResultLocation | null = null;
     let lastLocation: NetworkTestResultLocation | null = null;
+    let runner: StageRunner | null = null;
 
     try {
       connectionInfo = await this.getConnectionInfo();
@@ -220,7 +220,36 @@ export class SpeedTestEngine {
       } else if (!targetServer) {
         targetServer = await this.selectBestServer();
       }
-      const serverUrl = getServerWsUrl(targetServer);
+      const selection = await selectServerUrl(targetServer, this.config.transport);
+      let serverUrl = selection.primary.url;
+      testProtocol = selection.primary.protocol;
+      const fallbacks = [...selection.fallbacks];
+      const cancellationToken = this.cancellationToken;
+      // In browsers the stages run in a Web Worker, away from the page's rendering.
+      runner = await createStageRunner(this.config.browserWorker !== false);
+      const stageRunner = runner;
+
+      /**
+       * Runs the first stage that connects. If its socket cannot open within
+       * FIRST_CONNECTION_TIMEOUT_MS (refused, or a network that only passes HTTPS), the rest of
+       * the run switches to the next transport and the stage runs again there: raw TCP, then
+       * plain WebSocket, then secure WebSocket.
+       */
+      const firstConnection = async <T>(run: (url: string, connectTimeoutMs?: number) => Promise<T>): Promise<T> => {
+        while (fallbacks.length > 0) {
+          try {
+            const result = await run(serverUrl, FIRST_CONNECTION_TIMEOUT_MS);
+            fallbacks.length = 0;
+            return result;
+          } catch (error) {
+            if (!(error instanceof SocketConnectError)) throw error;
+            const next = fallbacks.shift()!;
+            serverUrl = next.url;
+            testProtocol = next.protocol;
+          }
+        }
+        return run(serverUrl);
+      };
 
       const buildStage = async (testStage: string): Promise<NetworkTestResultStage> => {
         if (this.locationProvider) {
@@ -246,20 +275,26 @@ export class SpeedTestEngine {
         if (this.tests.latency) {
           this.setStage('latency');
           stages.push(await buildStage('latencyStart'));
-          latencyData = await runLatencyTest({
-            serverUrl,
-            pingCount: this.config.pingCount,
-            timeoutMs: this.config.latencyTimeoutMs,
-            cancellationToken: this.cancellationToken,
-            onPing: (latencyMs, index) => this.callbacks.onLatencyPing?.(latencyMs, index),
-          });
+          latencyData = await firstConnection((url, connectTimeoutMs) =>
+            stageRunner.runLatencyTest({
+              serverUrl: url,
+              pingCount: this.config.pingCount,
+              timeoutMs: this.config.latencyTimeoutMs,
+              connectTimeoutMs,
+              cancellationToken,
+              onPing: (latencyMs, index) => this.callbacks.onLatencyPing?.(latencyMs, index),
+            })
+          );
           this.callbacks.onLatencyResult?.(latencyData);
         } else if (this.tests.download || this.tests.upload) {
-          latencyData = await runLatencyTest({
-            serverUrl,
-            pingCount: 1,
-            cancellationToken: this.cancellationToken,
-          });
+          latencyData = await firstConnection((url, connectTimeoutMs) =>
+            stageRunner.runLatencyTest({
+              serverUrl: url,
+              pingCount: 1,
+              connectTimeoutMs,
+              cancellationToken,
+            })
+          );
         }
 
         const latencyMs = latencyData?.minLatency ?? 0;
@@ -268,7 +303,7 @@ export class SpeedTestEngine {
         if (this.tests.download) {
           this.setStage('downloadEstimation');
           stages.push(await buildStage('downloadStart'));
-          downloadEstimation = await runDownloadEstimationTest({
+          downloadEstimation = await stageRunner.runDownloadEstimationTest({
             serverUrl,
             latencyMs,
             jitterMs,
@@ -278,7 +313,7 @@ export class SpeedTestEngine {
           this.setStage('download');
           downloadMessageSizeKb = getDownloadMessageSizeKb(downloadEstimation.speedMbps);
           downloadConnectionCount = getDownloadConnectionCount(downloadEstimation.speedMbps);
-          downloadResult = await runDownloadSpeedTest({
+          downloadResult = await stageRunner.runDownloadSpeedTest({
             serverUrl,
             messageSizeKb: downloadMessageSizeKb,
             connectionCount: downloadConnectionCount,
@@ -286,6 +321,10 @@ export class SpeedTestEngine {
             latencyMs,
             jitterMs,
             snapshotIntervalMs: this.config.snapshotIntervalMs,
+            threads: getThroughputThreadCount(
+              downloadEstimation.speedMbps,
+              this.config.throughputThreads
+            ),
             cancellationToken: this.cancellationToken,
             onSnapshot: (snapshot) => this.callbacks.onDownloadProgress?.(snapshot),
           });
@@ -300,7 +339,7 @@ export class SpeedTestEngine {
 
           this.setStage('uploadEstimation');
           stages.push(await buildStage('uploadStart'));
-          uploadEstimation = await runUploadEstimationTest({
+          uploadEstimation = await stageRunner.runUploadEstimationTest({
             serverUrl,
             latencyMs,
             jitterMs,
@@ -310,7 +349,7 @@ export class SpeedTestEngine {
           this.setStage('upload');
           uploadMessageSizeKb = getUploadMessageSizeKb(uploadEstimation.speedMbps);
           uploadConnectionCount = getUploadConnectionCount(uploadEstimation.speedMbps);
-          uploadResult = await runUploadSpeedTest({
+          uploadResult = await stageRunner.runUploadSpeedTest({
             serverUrl,
             messageSizeKb: uploadMessageSizeKb,
             connectionCount: uploadConnectionCount,
@@ -318,6 +357,10 @@ export class SpeedTestEngine {
             latencyMs,
             jitterMs,
             snapshotIntervalMs: this.config.snapshotIntervalMs,
+            threads: getThroughputThreadCount(
+              uploadEstimation.speedMbps,
+              this.config.throughputThreads
+            ),
             cancellationToken: this.cancellationToken,
             onSnapshot: (snapshot) => this.callbacks.onUploadProgress?.(snapshot),
           });
@@ -357,6 +400,7 @@ export class SpeedTestEngine {
         downloadMessageSizeKb,
         uploadConnectionCount,
         uploadMessageSizeKb,
+        testProtocol,
         stages,
         failedReason,
         failedStage,
@@ -370,6 +414,7 @@ export class SpeedTestEngine {
       }
       return testResults;
     } finally {
+      runner?.close();
       this._isRunning = false;
       this.cancellationToken = null;
     }
@@ -465,6 +510,7 @@ export class SpeedTestEngine {
     downloadMessageSizeKb: number | null;
     uploadConnectionCount: number | null;
     uploadMessageSizeKb: number | null;
+    testProtocol: string;
     stages: NetworkTestResultStage[];
     failedReason: string | null;
     failedStage: string | null;
@@ -538,7 +584,7 @@ export class SpeedTestEngine {
         testsRun: params.testsRun,
         downloadTestDuration: params.testsRun.download ? this.config.downloadDurationMs : null,
         uploadTestDuration: params.testsRun.upload ? this.config.uploadDurationMs : null,
-        testProtocol: 'WSS',
+        testProtocol: params.testProtocol,
         downloadConnectionCount: params.downloadConnectionCount,
         uploadConnectionCount: params.uploadConnectionCount,
         downloadPacketSize: params.downloadMessageSizeKb,
@@ -633,17 +679,27 @@ function normalizeAndValidateApplicationInfo(
 function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): SpeedTestConfig {
   const config = { ...DEFAULT_CONFIG, ...overrides };
 
-  const rules: Array<[keyof SpeedTestConfig, number, number]> = [
+  const rules: Array<[Exclude<keyof SpeedTestConfig, 'transport' | 'browserWorker'>, number, number]> = [
     ['pingCount', 5, 50],
     ['downloadDurationMs', 3000, 30000],
     ['uploadDurationMs', 3000, 30000],
     ['snapshotIntervalMs', 50, 5000],
     ['latencyTimeoutMs', 3000, 30000],
     ['estimationTimeoutMs', 3000, 30000],
+    ['throughputThreads', 0, 64],
   ];
 
+  if (!['auto', 'tcp', 'ws', 'wss'].includes(config.transport ?? 'auto')) {
+    throw new Error("SpeedTestEngineOptions.config.transport must be 'auto', 'tcp', 'ws', or 'wss'");
+  }
+
+  config.browserWorker = config.browserWorker ?? true;
+  if (typeof config.browserWorker !== 'boolean') {
+    throw new Error('SpeedTestEngineOptions.config.browserWorker must be a boolean');
+  }
+
   for (const [field, min, max] of rules) {
-    const value = config[field];
+    const value = config[field] ?? DEFAULT_CONFIG[field] ?? 0;
     if (value < min || value > max) {
       throw new Error(
         `SpeedTestEngineOptions.config.${field} must be between ${min} and ${max}`

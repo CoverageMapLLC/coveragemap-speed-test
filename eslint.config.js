@@ -44,6 +44,23 @@ export default [
     },
   },
   {
-    ignores: ['dist/**', 'demos/**'],
+    // Page script the real browser tests load (test/browser).
+    files: ['test/browser/fixtures/**/*.js'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: {
+        URLSearchParams: 'readonly',
+        clearInterval: 'readonly',
+        document: 'readonly',
+        location: 'readonly',
+        performance: 'readonly',
+        setInterval: 'readonly',
+        setTimeout: 'readonly',
+        window: 'writable',
+      },
+    },
+  },
+  {
+    ignores: ['dist/**', 'demos/**', 'scripts/**', 'src/browser/stage-worker-source.generated.ts'],
   },
 ];

@@ -16,5 +16,5 @@
     "types": ["vitest/globals", "node"],
     "noEmit": true
   },
-  "include": ["src", "test", "deploy-tests", "vitest.config.ts", "vitest.deploy.config.ts"]
+  "include": ["src", "test", "deploy-tests", "vitest.config.ts", "vitest.deploy.config.ts", "vitest.browser.config.ts"]
 }

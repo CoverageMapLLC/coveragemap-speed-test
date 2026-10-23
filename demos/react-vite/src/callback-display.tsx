@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { LatencyTestData, SpeedSnapshot, SpeedTestData } from '@coveragemap/speed-test';
 import { LineChart } from './components/charts';
 import { CollapsiblePanel, CollapsibleSection } from './components/collapsible-panel';
@@ -85,7 +86,7 @@ function LatencyStatSections({ data }: { data: LatencyTestData }) {
   );
 }
 
-function LatencyDataPanel({ data }: { data: LatencyTestData | null }) {
+function LatencyDataPanelView({ data }: { data: LatencyTestData | null }) {
   return (
     <CollapsiblePanel
       title="onLatencyResult"
@@ -136,7 +137,7 @@ function SpeedTestResultContent({
   );
 }
 
-function SpeedTestDataPanel({
+function SpeedTestDataPanelView({
   title,
   description,
   data,
@@ -158,7 +159,7 @@ function SpeedTestDataPanel({
   );
 }
 
-export function LatencyPingPanel({ pings }: { pings: LatencyPingEntry[] }) {
+function LatencyPingPanelView({ pings }: { pings: LatencyPingEntry[] }) {
   return (
     <CollapsiblePanel
       title="onLatencyPing"
@@ -186,7 +187,7 @@ export function LatencyPingPanel({ pings }: { pings: LatencyPingEntry[] }) {
   );
 }
 
-export function DownloadProgressPanel({ snapshots }: { snapshots: SpeedSnapshot[] }) {
+function DownloadProgressPanelView({ snapshots }: { snapshots: SpeedSnapshot[] }) {
   const speedStats = statsFromValues(snapshots.map((snapshot) => snapshot.speedMbps));
 
   return (
@@ -248,7 +249,7 @@ export function DownloadProgressPanel({ snapshots }: { snapshots: SpeedSnapshot[
   );
 }
 
-export function UploadProgressPanel({ snapshots }: { snapshots: SpeedSnapshot[] }) {
+function UploadProgressPanelView({ snapshots }: { snapshots: SpeedSnapshot[] }) {
   const speedStats = statsFromValues(snapshots.map((snapshot) => snapshot.speedMbps));
 
   return (
@@ -310,7 +311,7 @@ export function UploadProgressPanel({ snapshots }: { snapshots: SpeedSnapshot[] 
   );
 }
 
-export function CompletePanel({
+function CompletePanelView({
   complete,
 }: {
   complete: {
@@ -350,7 +351,7 @@ export function CompletePanel({
   );
 }
 
-export function ErrorPanel({ error }: { error: CallbackError | null }) {
+function ErrorPanelView({ error }: { error: CallbackError | null }) {
   return (
     <CollapsiblePanel
       title="onError"
@@ -369,7 +370,12 @@ export function ErrorPanel({ error }: { error: CallbackError | null }) {
   );
 }
 
-export {
-  LatencyDataPanel,
-  SpeedTestDataPanel,
-};
+// Every progress update re-renders the app. Memoized panels skip it when their own data did
+// not change, so a finished download panel does not redraw its charts during the upload.
+export const LatencyPingPanel = memo(LatencyPingPanelView);
+export const LatencyDataPanel = memo(LatencyDataPanelView);
+export const DownloadProgressPanel = memo(DownloadProgressPanelView);
+export const UploadProgressPanel = memo(UploadProgressPanelView);
+export const SpeedTestDataPanel = memo(SpeedTestDataPanelView);
+export const CompletePanel = memo(CompletePanelView);
+export const ErrorPanel = memo(ErrorPanelView);

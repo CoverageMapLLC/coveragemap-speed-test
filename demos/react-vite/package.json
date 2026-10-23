@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "npm --prefix ../.. run build:worker",
     "dev": "vite",
+    "prebuild": "npm --prefix ../.. run build:worker",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },

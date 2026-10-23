@@ -32,5 +32,11 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: Browser tests
+        # Real Chrome (preinstalled on GitHub's Ubuntu runners) runs the browser stage worker.
+        run: npm run test:browser
+        env:
+          REQUIRE_BROWSER: '1'
+
       - name: Build
         run: npm run build
