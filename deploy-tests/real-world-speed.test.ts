@@ -6,7 +6,7 @@ import {
   getSpeedApiBaseUrl,
   type ApiBaseUrlOverrides,
 } from '../src/api/config.js';
-import type { SpeedTestServer } from '../src/index.js';
+import type { SpeedTestServer, SpeedTestTransport } from '../src/index.js';
 import { SpeedTestEngine, type SpeedTestEngineApplicationInfo } from '../src/index.js';
 import { deployValidationApiOverrides } from './api-overrides.js';
 
@@ -77,11 +77,12 @@ function createEngine(
   type: SpeedTestEngineApplicationInfo['type'],
   options?: {
     tests?: ConstructorParameters<typeof SpeedTestEngine>[0]['tests'];
+    transport?: SpeedTestTransport;
   }
 ): SpeedTestEngine {
   return new SpeedTestEngine({
     application: buildApplicationInfo(scenario, type),
-    config: realWorldConfig,
+    config: options?.transport ? { ...realWorldConfig, transport: options.transport } : realWorldConfig,
     tests: options?.tests,
     api: deployResolvedApiOverrides,
   });
@@ -104,6 +105,94 @@ async function pickLiveServer(engine: SpeedTestEngine): Promise<SpeedTestServer>
 
   return servers[0]!;
 }
+
+/** Each transport forced through `config.transport`, the protocol a server lists for it, and what results report. */
+const TRANSPORTS = [
+  { transport: 'tcp', protocol: 'TCPv1', reported: 'TCP' },
+  { transport: 'ws', protocol: 'WSv1', reported: 'WS' },
+  { transport: 'wss', protocol: 'WSSv1', reported: 'WSS' },
+] as const;
+
+/** Servers that report no protocols predate the field and only speak secure WebSocket. */
+function listedProtocols(server: SpeedTestServer): readonly string[] {
+  return server.protocols && server.protocols.length > 0 ? server.protocols : ['WSSv1'];
+}
+
+/** The CDN server and the closest server that is not on the CDN, from the live server list. */
+async function pickTargets(engine: SpeedTestEngine): Promise<{ cdn: SpeedTestServer; closest: SpeedTestServer }> {
+  const servers = await engine.getServers();
+  const cdn = servers.find((server) => server.isCDN === true);
+  const closest = servers.find((server) => server.isCDN !== true);
+  expect(cdn, 'the server list has a CDN server').toBeDefined();
+  expect(closest, 'the server list has a non-CDN server').toBeDefined();
+  return { cdn: cdn!, closest: closest! };
+}
+
+describe.sequential('post-deploy transport validation', () => {
+  let targets: { cdn: SpeedTestServer; closest: SpeedTestServer };
+
+  beforeAll(async () => {
+    await ensureWebSocketRuntime();
+    targets = await pickTargets(createEngine('transport-discovery', 'backend'));
+    testSummary.push({
+      scenario: 'transport-discovery',
+      cdn: { domain: targets.cdn.domain, protocols: listedProtocols(targets.cdn) },
+      closest: { domain: targets.closest.domain, protocols: listedProtocols(targets.closest) },
+    });
+  }, deployTimeoutMs);
+
+  for (const target of ['cdn', 'closest'] as const) {
+    for (const { transport, protocol, reported } of TRANSPORTS) {
+      it(
+        `tests the ${target === 'cdn' ? 'CDN' : 'closest non-CDN'} server over ${reported}`,
+        async () => {
+          const server = targets[target];
+          const scenario = `${target}-${transport}`;
+          const engine = createEngine(scenario, 'backend', { transport });
+          const offered = listedProtocols(server).includes(protocol);
+
+          const startedAt = Date.now();
+          const result = await engine.run(server);
+          const elapsedMs = Date.now() - startedAt;
+          const measurements = result.results.measurements;
+
+          testSummary.push({
+            scenario,
+            server: server.domain,
+            offered,
+            protocol: result.testType.testProtocol,
+            status: result.results.testStatus,
+            elapsedMs,
+            latencyMs: measurements.latency,
+            downloadMbps: measurements.downloadSpeed,
+            uploadMbps: measurements.uploadSpeed,
+            failedStage: measurements.failedStage,
+            failedReason: measurements.failedReason,
+          });
+
+          expect(result.testType.testProtocol).toBe(reported);
+          if (!offered) {
+            // The server does not offer this transport (the CDN only accepts secure WebSocket on
+            // port 443): forcing it must fail cleanly at the first connection.
+            expect(result.results.testStatus).toBe('failed');
+            expect(measurements.failedStage).toBe('latencyStart');
+            expect(measurements.downloadSpeed).toBeNull();
+            expect(measurements.uploadSpeed).toBeNull();
+            return;
+          }
+
+          expect(result.results.testStatus, measurements.failedReason ?? undefined).toBe('passed');
+          expect(measurements.latency ?? 0).toBeGreaterThan(0);
+          expect(measurements.downloadSpeed ?? 0).toBeGreaterThan(0);
+          expect(measurements.uploadSpeed ?? 0).toBeGreaterThan(0);
+          expect(measurements.downloadList?.length ?? 0).toBeGreaterThan(0);
+          expect(measurements.uploadList?.length ?? 0).toBeGreaterThan(0);
+        },
+        deployTimeoutMs
+      );
+    }
+  }
+});
 
 describe.sequential('post-deploy real-world validation', () => {
   beforeAll(async () => {
