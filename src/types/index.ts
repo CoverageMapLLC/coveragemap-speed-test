@@ -42,6 +42,7 @@ export type {
   SpeedTestConfig,
   SpeedTestSelection,
   SpeedTestCallbacks,
+  SpeedTestTransport,
 } from './speed-test.js';
 
 export type {
