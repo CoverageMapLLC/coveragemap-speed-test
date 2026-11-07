@@ -24,6 +24,11 @@ export interface ThroughputTestOptions {
    */
   rampUpExclusionMs?: number;
   /**
+   * The loaded latency pings start this long after the first bytes of the stage are counted, so
+   * they measure a loaded link. `0` pings from the first bytes. Defaults to 1000 ms.
+   */
+  loadedLatencyDelayMs?: number;
+  /**
    * Threads to spread the sockets across. Values above 1 use worker threads in Node.js and
    * fall back to the calling thread everywhere else. Defaults to 1.
    */
@@ -33,6 +38,7 @@ export interface ThroughputTestOptions {
 }
 
 export const DEFAULT_RAMP_UP_EXCLUSION_MS = 250;
+export const DEFAULT_LOADED_LATENCY_DELAY_MS = 1000;
 
 /**
  * Runs a download or upload throughput stage: opens the lanes, starts them together once
@@ -43,8 +49,8 @@ export const DEFAULT_RAMP_UP_EXCLUSION_MS = 250;
  * point, when the stage ends before it, or with `rampUpExclusionMs = 0`, the speed is the whole
  * stage's less the latency bias, which the result also reports as `overallSpeedMbps`. The stage
  * still lasts `durationMs` from when the sockets opened. The loaded latency monitor connects at
- * the start but pings from that same point (the first bytes with an exclusion of 0), once the
- * link carries the stage's traffic.
+ * the start but pings from `loadedLatencyDelayMs` after the first bytes (at the first bytes with
+ * a delay of 0), once the link carries the stage's traffic.
  */
 export function runThroughputTest(
   direction: ThroughputDirection,
@@ -59,6 +65,7 @@ export function runThroughputTest(
     jitterMs,
     snapshotIntervalMs = 100,
     rampUpExclusionMs = DEFAULT_RAMP_UP_EXCLUSION_MS,
+    loadedLatencyDelayMs = DEFAULT_LOADED_LATENCY_DELAY_MS,
     threads = 1,
     cancellationToken,
     onSnapshot,
@@ -72,6 +79,7 @@ export function runThroughputTest(
     let snapshotTimer: ReturnType<typeof setInterval> | null = null;
     let finishTimer: ReturnType<typeof setTimeout> | null = null;
     let rampUpTimer: ReturnType<typeof setTimeout> | null = null;
+    let loadedLatencyTimer: ReturnType<typeof setTimeout> | null = null;
     let finishing = false;
     let sawFirstBytes = false;
     /** Where the measurement starts, in ms into the stage; null until then. */
@@ -95,27 +103,43 @@ export function runThroughputTest(
         ? calculateSpeedSinceMbps(bytes, elapsed, measuredFromBytes, measuredFromMs)
         : calculateStageSpeedMbps(bytes, elapsed, latencyMs, jitterMs);
 
-    /** The first bytes of the stage were counted: the link is loading. */
+    const clearStageTimers = () => {
+      if (rampUpTimer) clearTimeout(rampUpTimer);
+      rampUpTimer = null;
+      if (loadedLatencyTimer) clearTimeout(loadedLatencyTimer);
+      loadedLatencyTimer = null;
+    };
+
+    /**
+     * The first bytes of the stage were counted: the link is loading. Schedules the measurement
+     * start and, independently, the first loaded latency ping.
+     */
     const firstBytes = () => {
       if (sawFirstBytes || settled || finishing || testStartTime === null) return;
       sawFirstBytes = true;
-      if (rampUpExclusionMs <= 0) {
-        loadedLatencyMonitor.linkLoaded();
-        return;
+      if (rampUpExclusionMs > 0) {
+        rampUpTimer = setTimeout(() => {
+          rampUpTimer = null;
+          if (settled || finishing || testStartTime === null) return;
+          measuredFromMs = performance.now() - testStartTime;
+          measuredFromBytes = totalBytes();
+        }, rampUpExclusionMs);
       }
-      rampUpTimer = setTimeout(() => {
-        rampUpTimer = null;
-        if (settled || finishing || testStartTime === null) return;
-        measuredFromMs = performance.now() - testStartTime;
-        measuredFromBytes = totalBytes();
+      if (loadedLatencyDelayMs <= 0) {
         loadedLatencyMonitor.linkLoaded();
-      }, rampUpExclusionMs);
+      } else {
+        loadedLatencyTimer = setTimeout(() => {
+          loadedLatencyTimer = null;
+          if (settled || finishing) return;
+          loadedLatencyMonitor.linkLoaded();
+        }, loadedLatencyDelayMs);
+      }
     };
 
     const cleanup = () => {
       if (snapshotTimer) clearInterval(snapshotTimer);
       if (finishTimer) clearTimeout(finishTimer);
-      if (rampUpTimer) clearTimeout(rampUpTimer);
+      clearStageTimers();
       for (const lane of lanes ?? []) lane.close();
     };
 
@@ -135,8 +159,7 @@ export function runThroughputTest(
         return;
       }
       finishing = true;
-      if (rampUpTimer) clearTimeout(rampUpTimer);
-      rampUpTimer = null;
+      clearStageTimers();
       const elapsed = performance.now() - testStartTime;
       const bytes = totalBytes();
       const speedMbps = speed(bytes, elapsed);

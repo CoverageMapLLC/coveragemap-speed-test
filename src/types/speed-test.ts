@@ -59,10 +59,17 @@ export interface SpeedTestConfig {
   /**
    * The download and upload speeds are measured from this long after the stage's first bytes
    * (the first acknowledgement, for upload), so the slow start of a connection does not lower
-   * them. The stage still lasts its full duration, and the loaded latency pings start at that
-   * point. `0` measures the whole stage. Defaults to 250 ms, valid from 0 to 2000.
+   * them. The stage still lasts its full duration. `0` measures the whole stage. Defaults to
+   * 250 ms, valid from 0 to 2000.
    */
   rampUpExclusionMs?: number;
+  /**
+   * The loaded latency pings of the download and upload stages start this long after the stage's
+   * first bytes (the first acknowledgement, for upload), once the link carries the stage's
+   * traffic. A stage that ends sooner reports no loaded latency. `0` pings from the first bytes.
+   * Defaults to 1000 ms, valid from 0 to 10000.
+   */
+  loadedLatencyDelayMs?: number;
   /**
    * Threads the download and upload stages spread their sockets across when the estimated
    * speed is 1 Gbps or more. `0` (the default) chooses automatically, `1` keeps every socket
@@ -106,6 +113,7 @@ export const DEFAULT_CONFIG: SpeedTestConfig = {
   latencyTimeoutMs: 10000,
   estimationTimeoutMs: 15000,
   rampUpExclusionMs: 250,
+  loadedLatencyDelayMs: 1000,
   throughputThreads: 0,
   transport: 'auto',
   browserWorker: true,

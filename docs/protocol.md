@@ -460,11 +460,11 @@ testStartTime = performance.now()          (every socket is open; traffic starts
 stageSpeed(bytes, elapsed) = bytes / (max(elapsed - (latencyMs + jitterMs), 1) * 125)
 
 when the first bytes of the stage are counted:
-  if rampUpExclusionMs = 0: the link is loaded (loaded latency pings start)
-  else, rampUpExclusionMs (default 250 ms) later, unless the stage has ended:
+  if rampUpExclusionMs > 0, rampUpExclusionMs (default 250 ms) later, unless the stage has ended:
     fromMs = now - testStartTime
     fromBytes = totalBytes
-    the link is loaded (loaded latency pings start)
+  loadedLatencyDelayMs (default 1000 ms) later, or at once with 0, unless the stage has ended:
+    the link is loaded (loaded latency pings start, see below)
 
 speed(bytes, elapsed) =
   fromMs set and elapsed > fromMs ? (bytes - fromBytes) / ((elapsed - fromMs) * 125)
@@ -486,11 +486,11 @@ The ramp-up at the start of a stage, while the connections speed up, is left out
 
 #### Loaded Latency Monitor
 
-A dedicated WebSocket connection is opened to the same server at the start of Stage 3. Its first `PING` text frame waits until the link carries the stage's traffic: the measurement start (`rampUpExclusionMs` after the first bytes, see [Measurement Model](#measurement-model)), or the first bytes when `rampUpExclusionMs` is `0`. Pinging from the stage start would measure a link that is still idle. If the socket is not open yet at that point, it pings as soon as it opens. It then sends another `PING` 500 ms after each `PONG` is received. RTT is measured with `performance.now()` at send and receive time.
+A dedicated WebSocket connection is opened to the same server at the start of Stage 3. Its first `PING` text frame waits until the link carries the stage's traffic: `config.loadedLatencyDelayMs` (1,000 ms by default) after the stage's first bytes are counted, or the first bytes when it is `0`. This delay is separate from the ramp-up exclusion of the speed (see [Measurement Model](#measurement-model)). Pinging from the stage start would measure a link that is still idle. If the socket is not open yet at that point, it pings as soon as it opens. It then sends another `PING` 500 ms after each `PONG` is received. RTT is measured with `performance.now()` at send and receive time.
 
 ```
 [Stage 3 starts]                 → open LoadedLatencySocket, no PING yet
-[measurement start]
+[loadedLatencyDelayMs after the first bytes]
 LoadedLatencySocket ──── "PING" ──────────────────────────────► Server
 LoadedLatencySocket ◄─── "PONG" ───────────────────────────── Server
   [wait 500 ms]
@@ -507,7 +507,7 @@ LoadedLatencySocket ◄─── "PONG" ─────────────�
 
 Because these probes run while the download sockets are saturating the link, the resulting RTT values reflect latency **under load** rather than idle baseline latency. Compare `loadedLatency.minLatency` against the pre-test `LatencyTestData.minLatency` to measure the latency increase caused by congestion.
 
-`loadedLatency` is `null` in the result if no PONG was received before the monitor stopped (e.g. the stage ended before its measurement start, or the connection took longer to open than the stage).
+`loadedLatency` is `null` in the result if no PONG was received before the monitor stopped (e.g. the stage ended less than `loadedLatencyDelayMs` after its first bytes, or the connection took longer to open than the stage).
 
 #### Defaults
 
@@ -516,6 +516,7 @@ Because these probes run while the download sockets are saturating the link, the
 | `downloadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
 | `rampUpExclusionMs` | 250 ms | 0 – 2,000 ms |
+| `loadedLatencyDelayMs` | 1,000 ms | 0 – 10,000 ms |
 | Iterations per START | 500 | (fixed) |
 | Loaded latency ping interval | 500 ms | (fixed) |
 | Loaded latency grace period | 100 ms | (fixed) |
@@ -621,7 +622,7 @@ A refill stops after 4 ms of work, and acknowledgements that arrive together sha
 
 #### Loaded Latency Monitor
 
-Identical in design to the download stage loaded latency monitor. A dedicated PING/PONG WebSocket connection opens when Stage 5 starts and probes from the measurement start (`rampUpExclusionMs` after the first `ACK`), 500 ms after each `PONG`. The collected RTTs are attached to the upload result as `SpeedTestData.loadedLatency`. See the [download stage loaded latency description](#loaded-latency-monitor) for the full exchange sequence and timing details.
+Identical in design to the download stage loaded latency monitor. A dedicated PING/PONG WebSocket connection opens when Stage 5 starts and probes from `loadedLatencyDelayMs` after the first `ACK`, then 500 ms after each `PONG`. The collected RTTs are attached to the upload result as `SpeedTestData.loadedLatency`. See the [download stage loaded latency description](#loaded-latency-monitor) for the full exchange sequence and timing details.
 
 #### Measurement Model
 
@@ -635,6 +636,7 @@ Identical to download: `snapshotIntervalMs` periodic snapshots, a wall-clock `du
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
 | Refill timer | 5 ms | (fixed) |
 | `rampUpExclusionMs` | 250 ms | 0 – 2,000 ms |
+| `loadedLatencyDelayMs` | 1,000 ms | 0 – 10,000 ms |
 | Max chunk size | 1 MB | (fixed) |
 | Loaded latency ping interval | 500 ms | (fixed) |
 | Loaded latency grace period | 100 ms | (fixed) |

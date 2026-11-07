@@ -179,10 +179,10 @@ describe('throughput ramp-up exclusion', () => {
     // The final speed continues the last live values.
     expect(after.at(-1)!.speedMbps).toBeCloseTo(result.speedMbps, 0);
 
-    // Loaded latency pings start at the measurement start, then 500 ms after each PONG.
+    // Loaded latency pings start 1 s after the first byte, then 500 ms after each PONG.
     const latencySocket = RampSocketMock.instances[1];
-    expect(latencySocket.pings[0]).toBe(fromMs);
-    expect(latencySocket.pings[1]).toBe(fromMs + 5 + 500);
+    expect(latencySocket.pings[0]).toBe(405 + 1000);
+    expect(latencySocket.pings[1]).toBe(405 + 1000 + 5 + 500);
     expect(result.loadedLatency!.latencies.length).toBe(latencySocket.pings.length);
   });
 
@@ -225,14 +225,55 @@ describe('throughput ramp-up exclusion', () => {
     for (const snapshot of snapshots) {
       expect(snapshot.speedMbps).toBe(stageSpeed(snapshot.bytes, snapshot.timeOffsetMs, BIAS_MS));
     }
-    // Pings start with the first byte.
+  });
+
+  it('pings 1 s after the first byte even with an exclusion of 0', async () => {
+    RampSocketMock.feed = { firstMs: 105, everyMs: 20, units: () => 250_000 };
+    const { result } = await run('download', { durationMs: 2000, rampUpExclusionMs: 0 });
+
+    expect(RampSocketMock.instances[1].pings[0]).toBe(105 + 1000);
+    expect(result.loadedLatency).not.toBeNull();
+  });
+
+  it('pings at the first byte with a loaded latency delay of 0', async () => {
+    RampSocketMock.feed = { firstMs: 105, everyMs: 20, units: () => 250_000 };
+    const { result } = await run('download', { durationMs: 1000, loadedLatencyDelayMs: 0 });
+
     expect(RampSocketMock.instances[1].pings[0]).toBe(105);
+    expect(result.loadedLatency).not.toBeNull();
+  });
+
+  it('times the loaded latency delay apart from the ramp-up exclusion', async () => {
+    const feed: Feed = { firstMs: 105, everyMs: 20, units: (at) => (at < 400 ? 10_000 : 250_000) };
+    RampSocketMock.feed = feed;
+    // Pings start 300 ms after the first byte, well before the measurement starts.
+    const { result } = await run('download', {
+      durationMs: 2000,
+      rampUpExclusionMs: 990,
+      loadedLatencyDelayMs: 300,
+    });
+
+    expect(RampSocketMock.instances[1].pings[0]).toBe(405);
+    const fromMs = 105 + 990;
+    expect(result.speedMbps).toBe(speedSince(result.bytes, 2000, delivered(feed, fromMs), fromMs));
+  });
+
+  it('reports no loaded latency when the stage ends before the delay', async () => {
+    const feed: Feed = { firstMs: 105, everyMs: 20, units: () => 250_000 };
+    RampSocketMock.feed = feed;
+    const { result } = await run('download', { durationMs: 1000 });
+
+    // The measurement started 250 ms after the first byte, but the pings never did.
+    const fromMs = 355;
+    expect(result.speedMbps).toBe(speedSince(result.bytes, 1000, delivered(feed, fromMs), fromMs));
+    expect(RampSocketMock.instances[1].pings).toEqual([]);
+    expect(result.loadedLatency).toBeNull();
   });
 
   it('pings when the loaded latency socket opens if the link was loaded first', async () => {
     RampSocketMock.feed = { firstMs: 105, everyMs: 20, units: () => 250_000 };
     RampSocketMock.openDelayMs = [0, 300];
-    const { result } = await run('download', { durationMs: 1000, rampUpExclusionMs: 0 });
+    const { result } = await run('download', { durationMs: 1000, loadedLatencyDelayMs: 0 });
 
     expect(RampSocketMock.instances[1].pings[0]).toBe(300);
     expect(result.loadedLatency).not.toBeNull();
@@ -242,19 +283,20 @@ describe('throughput ramp-up exclusion', () => {
     // Four 8 KiB chunks acknowledged every 20 ms from 105 ms into the stage.
     const feed: Feed = { firstMs: 105, everyMs: 20, units: () => 4 };
     RampSocketMock.feed = feed;
-    const { result, snapshots } = await run('upload', { durationMs: 1000 });
+    const { result, snapshots } = await run('upload', { durationMs: 1500 });
 
     const fromMs = 105 + 250;
     const fromBytes = delivered(feed, fromMs, UPLOAD_CHUNK_BYTES);
-    expect(result.bytes).toBe(delivered(feed, 1000, UPLOAD_CHUNK_BYTES));
-    expect(result.speedMbps).toBe(speedSince(result.bytes, 1000, fromBytes, fromMs));
-    expect(result.overallSpeedMbps).toBe(stageSpeed(result.bytes, 1000, BIAS_MS));
+    expect(result.bytes).toBe(delivered(feed, 1500, UPLOAD_CHUNK_BYTES));
+    expect(result.speedMbps).toBe(speedSince(result.bytes, 1500, fromBytes, fromMs));
+    expect(result.overallSpeedMbps).toBe(stageSpeed(result.bytes, 1500, BIAS_MS));
     for (const snapshot of snapshots.filter((s) => s.timeOffsetMs < fromMs)) {
       expect(snapshot.speedMbps).toBe(stageSpeed(snapshot.bytes, snapshot.timeOffsetMs, BIAS_MS));
     }
-    for (const snapshot of snapshots.filter((s) => s.timeOffsetMs > fromMs && s.timeOffsetMs <= 1000)) {
+    for (const snapshot of snapshots.filter((s) => s.timeOffsetMs > fromMs && s.timeOffsetMs <= 1500)) {
       expect(snapshot.speedMbps).toBe(speedSince(snapshot.bytes, snapshot.timeOffsetMs, fromBytes, fromMs));
     }
-    expect(RampSocketMock.instances[1].pings[0]).toBe(fromMs);
+    // Loaded latency pings start 1 s after the first ACK.
+    expect(RampSocketMock.instances[1].pings[0]).toBe(105 + 1000);
   });
 });

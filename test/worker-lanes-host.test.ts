@@ -221,6 +221,7 @@ describe('openWorkerLanes', () => {
       messageSizeKb: 2,
       connectionCount: 4,
       durationMs: 150,
+      loadedLatencyDelayMs: 0,
       latencyMs: 1,
       jitterMs: 1,
       threads: 2,

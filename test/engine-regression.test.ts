@@ -345,6 +345,7 @@ describe('engine regression', () => {
         latencyTimeoutMs: 7777,
         estimationTimeoutMs: 8888,
         rampUpExclusionMs: 1500,
+        loadedLatencyDelayMs: 4321,
       },
     });
 
@@ -373,10 +374,20 @@ describe('engine regression', () => {
       expect.objectContaining({ timeoutMs: 8888 })
     );
     expect(mocks.downloadSpeedMock).toHaveBeenCalledWith(
-      expect.objectContaining({ durationMs: 3210, snapshotIntervalMs: 250, rampUpExclusionMs: 1500 })
+      expect.objectContaining({
+        durationMs: 3210,
+        snapshotIntervalMs: 250,
+        rampUpExclusionMs: 1500,
+        loadedLatencyDelayMs: 4321,
+      })
     );
     expect(mocks.uploadSpeedMock).toHaveBeenCalledWith(
-      expect.objectContaining({ durationMs: 6540, snapshotIntervalMs: 250, rampUpExclusionMs: 1500 })
+      expect.objectContaining({
+        durationMs: 6540,
+        snapshotIntervalMs: 250,
+        rampUpExclusionMs: 1500,
+        loadedLatencyDelayMs: 4321,
+      })
     );
     expect(result.testType.downloadTestDuration).toBe(3210);
     expect(result.testType.uploadTestDuration).toBe(6540);
@@ -498,10 +509,22 @@ describe('engine regression', () => {
     ).toThrow("SpeedTestEngineOptions.config.transport must be 'auto', 'tcp', 'ws', or 'wss'");
   });
 
-  it('excludes 250 ms of ramp-up by default and validates rampUpExclusionMs', async () => {
+  it('excludes 250 ms of ramp-up and delays loaded latency 1 s by default, and validates both', async () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
     const { DEFAULT_CONFIG } = await import('../src/types/speed-test.js');
     expect(DEFAULT_CONFIG.rampUpExclusionMs).toBe(250);
+    expect(DEFAULT_CONFIG.loadedLatencyDelayMs).toBe(1000);
+
+    for (const loadedLatencyDelayMs of [-1, 10001]) {
+      expect(
+        () => new SpeedTestEngine({ application: applicationMetadata, config: { loadedLatencyDelayMs } })
+      ).toThrow('SpeedTestEngineOptions.config.loadedLatencyDelayMs must be between 0 and 10000');
+    }
+    for (const loadedLatencyDelayMs of [0, 10000]) {
+      expect(
+        () => new SpeedTestEngine({ application: applicationMetadata, config: { loadedLatencyDelayMs } })
+      ).not.toThrow();
+    }
 
     for (const rampUpExclusionMs of [-1, 2001]) {
       expect(
@@ -529,8 +552,12 @@ describe('engine regression', () => {
       distance: null,
       isCDN: null,
     });
-    expect(mocks.downloadSpeedMock).toHaveBeenCalledWith(expect.objectContaining({ rampUpExclusionMs: 250 }));
-    expect(mocks.uploadSpeedMock).toHaveBeenCalledWith(expect.objectContaining({ rampUpExclusionMs: 250 }));
+    expect(mocks.downloadSpeedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ rampUpExclusionMs: 250, loadedLatencyDelayMs: 1000 })
+    );
+    expect(mocks.uploadSpeedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ rampUpExclusionMs: 250, loadedLatencyDelayMs: 1000 })
+    );
   });
 
   it('rejects invalid tests selection with no enabled tests', async () => {

@@ -299,7 +299,7 @@ describe('startStageWorker (engine side)', () => {
     }
   });
 
-  it('passes the ramp-up exclusion to throughput stages in the worker', async () => {
+  it('passes the ramp-up exclusion and loaded latency delay to throughput stages in the worker', async () => {
     const serverUrl = await startServer();
     const worker = channelWorker();
     const runner = await startedRunner(worker);
@@ -311,14 +311,19 @@ describe('startStageWorker (engine side)', () => {
       latencyMs: 0,
       jitterMs: 0,
       rampUpExclusionMs: 100,
+      loadedLatencyDelayMs: 200,
       cancellationToken: new CancellationToken(),
     });
     expect(worker.commands).toContainEqual(
-      expect.objectContaining({ type: 'run', stage: 'download', options: expect.objectContaining({ rampUpExclusionMs: 100 }) })
+      expect.objectContaining({
+        type: 'run',
+        stage: 'download',
+        options: expect.objectContaining({ rampUpExclusionMs: 100, loadedLatencyDelayMs: 200 }),
+      })
     );
     expect(data.speedMbps).toBeGreaterThan(0);
     expect(data.overallSpeedMbps).toBeGreaterThan(0);
-    // The link was loaded 100 ms after the first byte, well inside the stage.
+    // Loaded latency pings started 200 ms after the first byte, well inside the stage.
     expect(data.loadedLatency).not.toBeNull();
   });
 
