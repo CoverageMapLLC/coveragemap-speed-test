@@ -48,7 +48,6 @@ describe('live measurement completion merge', () => {
         durationMs: 2000,
         bytes: 4_000_000,
         speedMbps: 80,
-        overallSpeedMbps: 78,
         snapshots: [],
         loadedLatency: mockLoadedLatency,
       },

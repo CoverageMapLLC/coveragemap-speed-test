@@ -166,8 +166,8 @@ describe('throughput ramp-up exclusion', () => {
     expect(result.bytes).toBe(delivered(feed, 3000));
     expect(result.speedMbps).toBe(speedSince(result.bytes, 3000, fromBytes, fromMs));
     expect(result.speedMbps).toBeCloseTo(99.79, 2);
-    expect(result.overallSpeedMbps).toBe(stageSpeed(result.bytes, 3000, BIAS_MS));
-    expect(result.overallSpeedMbps).toBeLessThan(result.speedMbps);
+    // Leaving out the ramp-up raises the speed above the whole stage's.
+    expect(result.speedMbps).toBeGreaterThan(stageSpeed(result.bytes, 3000, BIAS_MS));
 
     // Progress uses the stage's speed until the measurement starts, then the measured speed.
     const before = snapshots.filter((snapshot) => snapshot.timeOffsetMs < fromMs);
@@ -199,7 +199,7 @@ describe('throughput ramp-up exclusion', () => {
     const fromMs = 655;
     expect(result.speedMbps).toBe(speedSince(result.bytes, 3000, delivered(feed, fromMs), fromMs));
     expect(result.speedMbps).toBeLessThan(80);
-    expect(result.speedMbps).toBeGreaterThan(result.overallSpeedMbps);
+    expect(result.speedMbps).toBeGreaterThan(stageSpeed(result.bytes, 3000, BIAS_MS));
   });
 
   it('uses the whole stage when the stage ends before the measurement starts', async () => {
@@ -209,7 +209,6 @@ describe('throughput ramp-up exclusion', () => {
 
     expect(result.bytes).toBe(delivered(feed, 600));
     expect(result.speedMbps).toBe(stageSpeed(result.bytes, 600, BIAS_MS));
-    expect(result.overallSpeedMbps).toBe(result.speedMbps);
     for (const snapshot of snapshots) {
       expect(snapshot.speedMbps).toBe(stageSpeed(snapshot.bytes, snapshot.timeOffsetMs, BIAS_MS));
     }
@@ -224,7 +223,6 @@ describe('throughput ramp-up exclusion', () => {
     const { result, snapshots } = await run('download', { durationMs: 200, snapshotIntervalMs: 50 });
 
     expect(result.speedMbps).toBe(stageSpeed(delivered(feed, 200), 200, BIAS_MS));
-    expect(result.overallSpeedMbps).toBe(result.speedMbps);
     expect(snapshots.length).toBeGreaterThanOrEqual(3);
     for (const snapshot of snapshots) {
       expect(snapshot.speedMbps).toBe(stageSpeed(snapshot.bytes, snapshot.timeOffsetMs, BIAS_MS));
@@ -282,7 +280,6 @@ describe('throughput ramp-up exclusion', () => {
     const fromBytes = delivered(feed, fromMs, UPLOAD_CHUNK_BYTES);
     expect(result.bytes).toBe(delivered(feed, 1500, UPLOAD_CHUNK_BYTES));
     expect(result.speedMbps).toBe(speedSince(result.bytes, 1500, fromBytes, fromMs));
-    expect(result.overallSpeedMbps).toBe(stageSpeed(result.bytes, 1500, BIAS_MS));
     for (const snapshot of snapshots.filter((s) => s.timeOffsetMs < fromMs)) {
       expect(snapshot.speedMbps).toBe(stageSpeed(snapshot.bytes, snapshot.timeOffsetMs, BIAS_MS));
     }

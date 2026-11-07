@@ -171,7 +171,6 @@ describe('throughput protocol runners', () => {
 
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.speedMbps).toBeGreaterThan(0);
-    expect(result.overallSpeedMbps).toBeGreaterThan(0);
     expect(snapshots.length).toBeGreaterThan(0);
     expect(result.loadedLatency).not.toBeNull();
     expect(result.loadedLatency!.latencies.length).toBeGreaterThan(0);

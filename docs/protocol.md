@@ -256,8 +256,8 @@ engine.run() called
        ├─ Stage 3: download ────────────────────────────────────────────┐
        │    │  N parallel sockets, sustained binary streaming           │
        │    │  + 1 dedicated socket, PING/PONG every 500 ms once loaded │
-       │    │  → SpeedTestData (speedMbps, overallSpeedMbps, bytes,     │
-       │    │                   snapshots[], loadedLatency)             │
+       │    │  → SpeedTestData (speedMbps, bytes, snapshots[],          │
+       │    │                   loadedLatency)                          │
        │    └────────────────────────────────────────────────────────────┘
        │
        │    [500 ms cooldown]
@@ -270,8 +270,8 @@ engine.run() called
        └─ Stage 5: upload ──────────────────────────────────────────────┐
             │  N parallel sockets, continuous binary sending            │
             │  + 1 dedicated socket, PING/PONG every 500 ms once loaded │
-            │  → SpeedTestData (speedMbps, overallSpeedMbps, bytes,     │
-            │                   snapshots[], loadedLatency)             │
+            │  → SpeedTestData (speedMbps, bytes, snapshots[],          │
+            │                   loadedLatency)                          │
             └────────────────────────────────────────────────────────────┘
 
        Assemble NetworkTestResultTestResults
@@ -476,13 +476,12 @@ every snapshotIntervalMs (default 100ms):
 
 after durationMs (from testStartTime, not from the first bytes):
   elapsed = now - testStartTime
-  resolve { durationMs: elapsed, speedMbps: speed(totalBytes, elapsed),
-            overallSpeedMbps: stageSpeed(totalBytes, elapsed), bytes: totalBytes, snapshots }
+  resolve { durationMs: elapsed, speedMbps: speed(totalBytes, elapsed), bytes: totalBytes, snapshots }
 ```
 
 All sockets accumulate into a single `totalBytes` counter. The final speed is computed from the aggregate data across all connections. Speeds are rounded to 3 decimal places.
 
-The ramp-up at the start of a stage, while the connections speed up, is left out of `speedMbps`: it is measured from 250 ms after the first bytes are counted (the first binary frame for download, the first `ACK` for upload) to the stage's end. Everything after that point counts, so a ramp-up longer than the exclusion still lowers the speed, and the wait for the first byte is already excluded, so no latency bias is subtracted. Before that point, or when the stage ends before it, the speed is the whole stage's, which the result always reports as `overallSpeedMbps`. Snapshots switch formula at the same point, so the final value continues the last progress values. Both the 250 ms exclusion and the 1 s loaded latency delay are fixed; applications cannot configure them. With worker threads, each worker tells the main thread once when its lane counts its first bytes, and the main thread does all the timing.
+The ramp-up at the start of a stage, while the connections speed up, is left out of `speedMbps`: it is measured from 250 ms after the first bytes are counted (the first binary frame for download, the first `ACK` for upload) to the stage's end. Everything after that point counts, so a ramp-up longer than the exclusion still lowers the speed, and the wait for the first byte is already excluded, so no latency bias is subtracted. Before that point, or when the stage ends before it, the speed is the whole stage's. Snapshots switch formula at the same point, so the final value continues the last progress values. Both the 250 ms exclusion and the 1 s loaded latency delay are fixed; applications cannot configure them. With worker threads, each worker tells the main thread once when its lane counts its first bytes, and the main thread does all the timing.
 
 #### Loaded Latency Monitor
 
@@ -668,7 +667,7 @@ This is applied consistently at both snapshot sampling time and final result ass
 
 ## Timing Normalization
 
-Raw measured durations include network round-trip overhead that isn't part of the data transfer itself. The estimation stages and the throughput stages' whole-stage speed (`overallSpeedMbps`, and `speedMbps` until the measurement start) remove this bias by subtracting the latency and jitter baselines measured in Stage 1. A throughput `speedMbps` measured from 250 ms after the first bytes needs no correction, since that point is already past the wait for the first byte:
+Raw measured durations include network round-trip overhead that isn't part of the data transfer itself. The estimation stages, and the throughput stages' `speedMbps` until the measurement start (or for a stage that ends before it), remove this bias by subtracting the latency and jitter baselines measured in Stage 1. A throughput `speedMbps` measured from 250 ms after the first bytes needs no correction, since that point is already past the wait for the first byte:
 
 ```
 effectiveDurationMs = max(rawDurationMs - (minLatency + minJitter), 1)

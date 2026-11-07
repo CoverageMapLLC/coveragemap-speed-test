@@ -231,7 +231,6 @@ describe('openWorkerLanes', () => {
     expect(FakeWorker.instances).toHaveLength(2);
     expect(result.bytes).toBe(4 * 2048);
     expect(result.speedMbps).toBe(0);
-    expect(result.overallSpeedMbps).toBeGreaterThan(0);
     expect(result.loadedLatency).not.toBeNull();
   });
 

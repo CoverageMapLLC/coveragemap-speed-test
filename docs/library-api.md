@@ -920,7 +920,6 @@ Aggregated result from a sustained download or upload throughput stage.
 interface SpeedTestData {
   durationMs: number;
   speedMbps: number;
-  overallSpeedMbps: number;
   bytes: number;
   snapshots: SpeedSnapshot[];
   loadedLatency: LatencyTestData | null;
@@ -930,8 +929,7 @@ interface SpeedTestData {
 | Field | Type | Description |
 |-------|------|-------------|
 | `durationMs` | `number` | Total stage duration in milliseconds. |
-| `speedMbps` | `number` | Final throughput result in Mbps, measured from 250 ms after the stage's first counted bytes (the first `ACK`, for upload) to its end, so the slow start of the connections does not lower it. Everything after that point counts, so a ramp-up that lasts longer still lowers it. Equals `overallSpeedMbps` when the stage ended before that point. This is the value reported as `downloadSpeed` / `uploadSpeed`. See [Measurement Model](./protocol.md#measurement-model). |
-| `overallSpeedMbps` | `number` | Throughput over the whole stage, less the latency bias: `bytes / (max(durationMs - (latencyMs + jitterMs), 1) * 125)`. Earlier versions reported this as `speedMbps`. |
+| `speedMbps` | `number` | Final throughput result in Mbps, measured from 250 ms after the stage's first counted bytes (the first `ACK`, for upload) to its end, so the slow start of the connections does not lower it. Everything after that point counts, so a ramp-up that lasts longer still lowers it. A stage that ended before that point is measured as a whole: `bytes / (max(durationMs - (latencyMs + jitterMs), 1) * 125)`. This is the value reported as `downloadSpeed` / `uploadSpeed`. See [Measurement Model](./protocol.md#measurement-model). |
 | `bytes` | `number` | Total bytes transferred during the stage. |
 | `snapshots` | `SpeedSnapshot[]` | All progress snapshots collected during the stage. |
 | `loadedLatency` | `LatencyTestData \| null` | Latency measurements collected concurrently while throughput was saturated. `null` if no pings were completed during the stage, including a stage that ended less than 1 s after its first bytes. |

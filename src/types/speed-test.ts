@@ -38,11 +38,10 @@ export interface SpeedTestData {
   durationMs: number;
   /**
    * Measured from 250 ms after the stage's first counted bytes to its end, so the ramp-up does
-   * not count. Equals `overallSpeedMbps` when the stage ended before that point.
+   * not count. A stage that ended before that point is measured as a whole, less the latency
+   * bias (`latencyMs + jitterMs`).
    */
   speedMbps: number;
-  /** Over the whole stage, less the latency bias (`latencyMs + jitterMs`). */
-  overallSpeedMbps: number;
   bytes: number;
   snapshots: SpeedSnapshot[];
   loadedLatency: LatencyTestData | null;

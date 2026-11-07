@@ -39,7 +39,7 @@ export const LOADED_LATENCY_DELAY_MS = 1000;
  * The speed is measured from `RAMP_UP_EXCLUSION_MS` (250 ms) after the first bytes of the stage
  * are counted (acknowledged, for upload) to its end, so the start of the ramp-up does not count.
  * Before that point, or when the stage ends before it, the speed is the whole stage's less the
- * latency bias, which the result also reports as `overallSpeedMbps`. The stage still lasts
+ * latency bias. The stage still lasts
  * `durationMs` from when the sockets opened. The loaded latency monitor connects at the start but
  * pings from `LOADED_LATENCY_DELAY_MS` (1 s) after the first bytes, once the link carries the
  * stage's traffic.
@@ -147,7 +147,6 @@ export function runThroughputTest(
       const elapsed = performance.now() - testStartTime;
       const bytes = totalBytes();
       const speedMbps = speed(bytes, elapsed);
-      const overallSpeedMbps = calculateStageSpeedMbps(bytes, elapsed, latencyMs, jitterMs);
 
       let loadedLatency: LatencyTestData | null = null;
       try {
@@ -162,7 +161,6 @@ export function runThroughputTest(
       settle(resolve, {
         durationMs: elapsed,
         speedMbps,
-        overallSpeedMbps,
         bytes,
         snapshots,
         loadedLatency,

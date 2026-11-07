@@ -318,7 +318,7 @@ interface NetworkTestResultSpeedTimePair {
 }
 ```
 
-`downloadSpeed` and `uploadSpeed` are the stages' `speedMbps`: measured from 250 ms after the stage's first counted bytes to its end, so the ramp-up at the start does not count. `totalDownload` and `totalUpload` are the whole stage's bytes. The whole-stage speed is not part of the result payload; it is available as `SpeedTestData.overallSpeedMbps` from the `onDownloadResult` / `onUploadResult` callbacks.
+`downloadSpeed` and `uploadSpeed` are the stages' `speedMbps`: measured from 250 ms after the stage's first counted bytes to its end, so the ramp-up at the start does not count. `totalDownload` and `totalUpload` are the whole stage's bytes. A stage that ended before that point is measured as a whole.
 
 `downloadList` and `uploadList` are time-series samples (time offset, speed, bytes). Their speeds follow the same rule as the final speed: over the whole stage until the measurement start, from the measurement start afterwards. `failedReason` / `failedStage` are set when the run does not complete successfully.
 

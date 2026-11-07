@@ -294,7 +294,6 @@ describe('startStageWorker (engine side)', () => {
         onSnapshot: (snapshot) => snapshots.push(snapshot),
       });
       expect(data.bytes).toBeGreaterThan(0);
-      expect(data.overallSpeedMbps).toBeGreaterThan(0);
       expect(snapshots.length).toBeGreaterThanOrEqual(3);
       expect(data.snapshots).toEqual(snapshots);
     }

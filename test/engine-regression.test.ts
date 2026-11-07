@@ -97,7 +97,6 @@ beforeEach(() => {
     durationMs: 2000,
     bytes: 4_000_000,
     speedMbps: 120,
-    overallSpeedMbps: 110,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
     loadedLatency: mockLoadedLatency,
   });
@@ -105,7 +104,6 @@ beforeEach(() => {
     durationMs: 2000,
     bytes: 2_000_000,
     speedMbps: 60,
-    overallSpeedMbps: 55,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
     loadedLatency: mockLoadedLatency,
   });
@@ -219,7 +217,6 @@ describe('engine regression', () => {
         durationMs: 2000,
         bytes: 4_000_000,
         speedMbps: 120,
-        overallSpeedMbps: 110,
         snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
         loadedLatency: mockLoadedLatency,
       },
@@ -227,7 +224,6 @@ describe('engine regression', () => {
         durationMs: 2000,
         bytes: 2_000_000,
         speedMbps: 60,
-        overallSpeedMbps: 55,
         snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
         loadedLatency: mockLoadedLatency,
       },
