@@ -35,8 +35,6 @@ export interface ThroughputStageOptions {
   latencyMs: number;
   jitterMs: number;
   snapshotIntervalMs?: number;
-  rampUpExclusionMs?: number;
-  loadedLatencyDelayMs?: number;
   threads?: number;
 }
 

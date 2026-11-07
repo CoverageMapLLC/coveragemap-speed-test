@@ -216,32 +216,23 @@ describe('openWorkerLanes', () => {
   });
 
   it('starts the ramp-up exclusion and loaded latency from bytes counted on worker threads', async () => {
-    const base = {
+    // Every byte arrives at once at the start: nothing is counted after the measurement start
+    // 250 ms later, and the loaded latency pings start 1 s after the first bytes.
+    const result = await runDownloadSpeedTest({
       serverUrl: SERVER_URL,
       messageSizeKb: 2,
       connectionCount: 4,
-      durationMs: 150,
-      loadedLatencyDelayMs: 0,
+      durationMs: 1300,
       latencyMs: 1,
       jitterMs: 1,
       threads: 2,
       cancellationToken: new CancellationToken(),
-    };
-    const loaded = await runDownloadSpeedTest({ ...base, rampUpExclusionMs: 0 });
+    });
     expect(FakeWorker.instances).toHaveLength(2);
-    expect(loaded.bytes).toBe(4 * 2048);
-    expect(loaded.speedMbps).toBe(loaded.overallSpeedMbps);
-    expect(loaded.loadedLatency).not.toBeNull();
-
-    FakeWorker.instances = [];
-    LaneSocketMock.instances = [];
-    // Every byte arrives at once at the start, so nothing is counted after the measurement start.
-    const excluded = await runDownloadSpeedTest({ ...base, rampUpExclusionMs: 30 });
-    expect(FakeWorker.instances).toHaveLength(2);
-    expect(excluded.bytes).toBe(4 * 2048);
-    expect(excluded.speedMbps).toBe(0);
-    expect(excluded.overallSpeedMbps).toBeGreaterThan(0);
-    expect(excluded.loadedLatency).not.toBeNull();
+    expect(result.bytes).toBe(4 * 2048);
+    expect(result.speedMbps).toBe(0);
+    expect(result.overallSpeedMbps).toBeGreaterThan(0);
+    expect(result.loadedLatency).not.toBeNull();
   });
 
   it('reports a socket failure after the lanes were handed over through onError', async () => {

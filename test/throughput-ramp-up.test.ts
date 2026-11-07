@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runDownloadSpeedTest } from '../src/tests/download-speed-test.js';
-import type { ThroughputTestOptions } from '../src/tests/throughput-runner.js';
+import {
+  LOADED_LATENCY_DELAY_MS,
+  RAMP_UP_EXCLUSION_MS,
+  type ThroughputTestOptions,
+} from '../src/tests/throughput-runner.js';
 import { runUploadSpeedTest } from '../src/tests/upload-speed-test.js';
 import type { SpeedTestData } from '../src/types/speed-test.js';
 import { CancellationToken } from '../src/utils/cancellation.js';
@@ -214,48 +218,29 @@ describe('throughput ramp-up exclusion', () => {
     expect(result.loadedLatency).toBeNull();
   });
 
-  it('measures the whole stage, as before, with an exclusion of 0', async () => {
-    const feed: Feed = { firstMs: 105, everyMs: 20, units: (at) => (at < 500 ? 10_000 : 250_000) };
+  it('uses the whole stage for a stage that ends within 250 ms of its first byte', async () => {
+    const feed: Feed = { firstMs: 5, everyMs: 20, units: (at) => (at < 100 ? 10_000 : 250_000) };
     RampSocketMock.feed = feed;
-    const { result, snapshots } = await run('download', { durationMs: 1000, rampUpExclusionMs: 0 });
+    const { result, snapshots } = await run('download', { durationMs: 200, snapshotIntervalMs: 50 });
 
-    expect(result.speedMbps).toBe(stageSpeed(delivered(feed, 1000), 1000, BIAS_MS));
+    expect(result.speedMbps).toBe(stageSpeed(delivered(feed, 200), 200, BIAS_MS));
     expect(result.overallSpeedMbps).toBe(result.speedMbps);
-    expect(snapshots.length).toBeGreaterThan(5);
+    expect(snapshots.length).toBeGreaterThanOrEqual(3);
     for (const snapshot of snapshots) {
       expect(snapshot.speedMbps).toBe(stageSpeed(snapshot.bytes, snapshot.timeOffsetMs, BIAS_MS));
     }
   });
 
-  it('pings 1 s after the first byte even with an exclusion of 0', async () => {
-    RampSocketMock.feed = { firstMs: 105, everyMs: 20, units: () => 250_000 };
-    const { result } = await run('download', { durationMs: 2000, rampUpExclusionMs: 0 });
-
-    expect(RampSocketMock.instances[1].pings[0]).toBe(105 + 1000);
-    expect(result.loadedLatency).not.toBeNull();
-  });
-
-  it('pings at the first byte with a loaded latency delay of 0', async () => {
-    RampSocketMock.feed = { firstMs: 105, everyMs: 20, units: () => 250_000 };
-    const { result } = await run('download', { durationMs: 1000, loadedLatencyDelayMs: 0 });
-
-    expect(RampSocketMock.instances[1].pings[0]).toBe(105);
-    expect(result.loadedLatency).not.toBeNull();
-  });
-
-  it('times the loaded latency delay apart from the ramp-up exclusion', async () => {
-    const feed: Feed = { firstMs: 105, everyMs: 20, units: (at) => (at < 400 ? 10_000 : 250_000) };
+  it('starts loaded latency 1 s after the first byte, apart from the measurement start', async () => {
+    const feed: Feed = { firstMs: 105, everyMs: 20, units: () => 250_000 };
     RampSocketMock.feed = feed;
-    // Pings start 300 ms after the first byte, well before the measurement starts.
-    const { result } = await run('download', {
-      durationMs: 2000,
-      rampUpExclusionMs: 990,
-      loadedLatencyDelayMs: 300,
-    });
+    const { result } = await run('download', { durationMs: 2000 });
 
-    expect(RampSocketMock.instances[1].pings[0]).toBe(405);
-    const fromMs = 105 + 990;
+    // The measurement starts 250 ms after the first byte; the pings 1 s after it.
+    const fromMs = 105 + RAMP_UP_EXCLUSION_MS;
     expect(result.speedMbps).toBe(speedSince(result.bytes, 2000, delivered(feed, fromMs), fromMs));
+    expect(RampSocketMock.instances[1].pings[0]).toBe(105 + LOADED_LATENCY_DELAY_MS);
+    expect(result.loadedLatency).not.toBeNull();
   });
 
   it('reports no loaded latency when the stage ends before the delay', async () => {
@@ -272,11 +257,19 @@ describe('throughput ramp-up exclusion', () => {
 
   it('pings when the loaded latency socket opens if the link was loaded first', async () => {
     RampSocketMock.feed = { firstMs: 105, everyMs: 20, units: () => 250_000 };
-    RampSocketMock.openDelayMs = [0, 300];
-    const { result } = await run('download', { durationMs: 1000, loadedLatencyDelayMs: 0 });
+    RampSocketMock.openDelayMs = [0, 1300];
+    const { result } = await run('download', { durationMs: 2000 });
 
-    expect(RampSocketMock.instances[1].pings[0]).toBe(300);
+    expect(RampSocketMock.instances[1].pings[0]).toBe(1300);
     expect(result.loadedLatency).not.toBeNull();
+  });
+
+  it('uses fixed values that applications cannot configure', async () => {
+    expect(RAMP_UP_EXCLUSION_MS).toBe(250);
+    expect(LOADED_LATENCY_DELAY_MS).toBe(1000);
+    const { DEFAULT_CONFIG } = await import('../src/types/speed-test.js');
+    expect(Object.keys(DEFAULT_CONFIG)).not.toContain('rampUpExclusionMs');
+    expect(Object.keys(DEFAULT_CONFIG)).not.toContain('loadedLatencyDelayMs');
   });
 
   it('measures the upload from 250 ms after the first ACK', async () => {

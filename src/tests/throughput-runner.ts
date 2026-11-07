@@ -19,16 +19,6 @@ export interface ThroughputTestOptions {
   jitterMs: number;
   snapshotIntervalMs?: number;
   /**
-   * The speed is measured from this long after the first bytes of the stage are counted, so the
-   * ramp-up at the start does not count. `0` measures the whole stage. Defaults to 250 ms.
-   */
-  rampUpExclusionMs?: number;
-  /**
-   * The loaded latency pings start this long after the first bytes of the stage are counted, so
-   * they measure a loaded link. `0` pings from the first bytes. Defaults to 1000 ms.
-   */
-  loadedLatencyDelayMs?: number;
-  /**
    * Threads to spread the sockets across. Values above 1 use worker threads in Node.js and
    * fall back to the calling thread everywhere else. Defaults to 1.
    */
@@ -37,20 +27,22 @@ export interface ThroughputTestOptions {
   onSnapshot?: (snapshot: SpeedSnapshot) => void;
 }
 
-export const DEFAULT_RAMP_UP_EXCLUSION_MS = 250;
-export const DEFAULT_LOADED_LATENCY_DELAY_MS = 1000;
+/** The speed is measured from this long after the stage's first counted bytes, leaving out the ramp-up. */
+export const RAMP_UP_EXCLUSION_MS = 250;
+/** Loaded latency pings start this long after the stage's first counted bytes, once the link is loaded. */
+export const LOADED_LATENCY_DELAY_MS = 1000;
 
 /**
  * Runs a download or upload throughput stage: opens the lanes, starts them together once
  * every socket is connected, emits snapshots, and resolves after `durationMs`.
  *
- * The speed is measured from `rampUpExclusionMs` after the first bytes of the stage are counted
- * (acknowledged, for upload) to its end, so the start of the ramp-up does not count. Before that
- * point, when the stage ends before it, or with `rampUpExclusionMs = 0`, the speed is the whole
- * stage's less the latency bias, which the result also reports as `overallSpeedMbps`. The stage
- * still lasts `durationMs` from when the sockets opened. The loaded latency monitor connects at
- * the start but pings from `loadedLatencyDelayMs` after the first bytes (at the first bytes with
- * a delay of 0), once the link carries the stage's traffic.
+ * The speed is measured from `RAMP_UP_EXCLUSION_MS` (250 ms) after the first bytes of the stage
+ * are counted (acknowledged, for upload) to its end, so the start of the ramp-up does not count.
+ * Before that point, or when the stage ends before it, the speed is the whole stage's less the
+ * latency bias, which the result also reports as `overallSpeedMbps`. The stage still lasts
+ * `durationMs` from when the sockets opened. The loaded latency monitor connects at the start but
+ * pings from `LOADED_LATENCY_DELAY_MS` (1 s) after the first bytes, once the link carries the
+ * stage's traffic.
  */
 export function runThroughputTest(
   direction: ThroughputDirection,
@@ -64,8 +56,6 @@ export function runThroughputTest(
     latencyMs,
     jitterMs,
     snapshotIntervalMs = 100,
-    rampUpExclusionMs = DEFAULT_RAMP_UP_EXCLUSION_MS,
-    loadedLatencyDelayMs = DEFAULT_LOADED_LATENCY_DELAY_MS,
     threads = 1,
     cancellationToken,
     onSnapshot,
@@ -117,23 +107,17 @@ export function runThroughputTest(
     const firstBytes = () => {
       if (sawFirstBytes || settled || finishing || testStartTime === null) return;
       sawFirstBytes = true;
-      if (rampUpExclusionMs > 0) {
-        rampUpTimer = setTimeout(() => {
-          rampUpTimer = null;
-          if (settled || finishing || testStartTime === null) return;
-          measuredFromMs = performance.now() - testStartTime;
-          measuredFromBytes = totalBytes();
-        }, rampUpExclusionMs);
-      }
-      if (loadedLatencyDelayMs <= 0) {
+      rampUpTimer = setTimeout(() => {
+        rampUpTimer = null;
+        if (settled || finishing || testStartTime === null) return;
+        measuredFromMs = performance.now() - testStartTime;
+        measuredFromBytes = totalBytes();
+      }, RAMP_UP_EXCLUSION_MS);
+      loadedLatencyTimer = setTimeout(() => {
+        loadedLatencyTimer = null;
+        if (settled || finishing) return;
         loadedLatencyMonitor.linkLoaded();
-      } else {
-        loadedLatencyTimer = setTimeout(() => {
-          loadedLatencyTimer = null;
-          if (settled || finishing) return;
-          loadedLatencyMonitor.linkLoaded();
-        }, loadedLatencyDelayMs);
-      }
+      }, LOADED_LATENCY_DELAY_MS);
     };
 
     const cleanup = () => {

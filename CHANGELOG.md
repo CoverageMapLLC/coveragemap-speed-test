@@ -4,18 +4,16 @@
 
 ### Improvements
 
-- **Ramp-up left out of throughput speeds**: Download and upload speeds are now measured from `config.rampUpExclusionMs` (250 ms by default) after the stage's first bytes are counted (the first `ACK` for upload) to the stage's end, so the slow start of the connections no longer lowers the result. Everything after that point counts, so a ramp-up that lasts longer still lowers the speed. The stage still lasts its full duration from when the sockets opened. Progress snapshots use the same rule, so the final speed continues the last progress values. A stage that ends before that point, or `rampUpExclusionMs: 0`, measures the whole stage as before. This matches the CoverageMap Android and iOS speed test libraries.
-- **Loaded latency measures a loaded link**: The loaded latency socket still connects when the stage starts, but sends its first `PING` `config.loadedLatencyDelayMs` (1 s by default) after the stage's first bytes, instead of while the link is still idle. The delay is independent of the ramp-up exclusion. Pings now go 500 ms after each `PONG` (was 1000 ms). A stage that ends before the delay reports no loaded latency (`null`).
+- **Ramp-up left out of throughput speeds**: Download and upload speeds are now measured from 250 ms after the stage's first bytes are counted (the first `ACK` for upload) to the stage's end, so the slow start of the connections no longer lowers the result. Everything after that point counts, so a ramp-up that lasts longer still lowers the speed. The stage still lasts its full duration from when the sockets opened. Progress snapshots use the same rule, so the final speed continues the last progress values. A stage that ends before that point measures the whole stage as before. The 250 ms is fixed, not a configuration option. This matches the CoverageMap Android and iOS speed test libraries.
+- **Loaded latency measures a loaded link**: The loaded latency socket still connects when the stage starts, but sends its first `PING` 1 s after the stage's first bytes, instead of while the link is still idle. The delay is fixed and independent of the ramp-up exclusion. Pings now go 500 ms after each `PONG` (was 1000 ms). A stage that ends before the delay reports no loaded latency (`null`).
 
 ### New Features
 
-- **`config.rampUpExclusionMs`**: 0 to 2000 ms, default 250. `0` measures the whole stage.
-- **`config.loadedLatencyDelayMs`**: 0 to 10000 ms, default 1000. `0` starts the loaded latency pings at the first bytes.
 - **`SpeedTestData.overallSpeedMbps`**: The whole stage's speed less the latency bias, which is what `speedMbps` reported before.
 
 ### Breaking Changes
 
-- `SpeedTestData.speedMbps`, and with it `downloadSpeed`, `uploadSpeed`, `downloadList`, and `uploadList` in the result, now leave out the ramp-up and read higher on most links. Set `rampUpExclusionMs: 0` for the previous values, or read `overallSpeedMbps`.
+- `SpeedTestData.speedMbps`, and with it `downloadSpeed`, `uploadSpeed`, `downloadList`, and `uploadList` in the result, now leave out the ramp-up and read higher on most links. Read `overallSpeedMbps` for the previous whole-stage values.
 - `SpeedTestData` has the new required field `overallSpeedMbps`: code that builds `SpeedTestData` objects, such as test mocks, needs to set it.
 
 ## 0.5.0

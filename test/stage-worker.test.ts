@@ -294,37 +294,10 @@ describe('startStageWorker (engine side)', () => {
         onSnapshot: (snapshot) => snapshots.push(snapshot),
       });
       expect(data.bytes).toBeGreaterThan(0);
+      expect(data.overallSpeedMbps).toBeGreaterThan(0);
       expect(snapshots.length).toBeGreaterThanOrEqual(3);
       expect(data.snapshots).toEqual(snapshots);
     }
-  });
-
-  it('passes the ramp-up exclusion and loaded latency delay to throughput stages in the worker', async () => {
-    const serverUrl = await startServer();
-    const worker = channelWorker();
-    const runner = await startedRunner(worker);
-    const data = await runner.runDownloadSpeedTest({
-      serverUrl,
-      messageSizeKb: 64,
-      connectionCount: 2,
-      durationMs: 600,
-      latencyMs: 0,
-      jitterMs: 0,
-      rampUpExclusionMs: 100,
-      loadedLatencyDelayMs: 200,
-      cancellationToken: new CancellationToken(),
-    });
-    expect(worker.commands).toContainEqual(
-      expect.objectContaining({
-        type: 'run',
-        stage: 'download',
-        options: expect.objectContaining({ rampUpExclusionMs: 100, loadedLatencyDelayMs: 200 }),
-      })
-    );
-    expect(data.speedMbps).toBeGreaterThan(0);
-    expect(data.overallSpeedMbps).toBeGreaterThan(0);
-    // Loaded latency pings started 200 ms after the first byte, well inside the stage.
-    expect(data.loadedLatency).not.toBeNull();
   });
 
   it('cancels a stage in the worker and rejects at once', async () => {
