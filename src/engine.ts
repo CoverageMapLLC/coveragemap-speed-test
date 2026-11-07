@@ -321,6 +321,7 @@ export class SpeedTestEngine {
             latencyMs,
             jitterMs,
             snapshotIntervalMs: this.config.snapshotIntervalMs,
+            rampUpExclusionMs: this.config.rampUpExclusionMs,
             threads: getThroughputThreadCount(
               downloadEstimation.speedMbps,
               this.config.throughputThreads
@@ -357,6 +358,7 @@ export class SpeedTestEngine {
             latencyMs,
             jitterMs,
             snapshotIntervalMs: this.config.snapshotIntervalMs,
+            rampUpExclusionMs: this.config.rampUpExclusionMs,
             threads: getThroughputThreadCount(
               uploadEstimation.speedMbps,
               this.config.throughputThreads
@@ -686,6 +688,7 @@ function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): Speed
     ['snapshotIntervalMs', 50, 5000],
     ['latencyTimeoutMs', 3000, 30000],
     ['estimationTimeoutMs', 3000, 30000],
+    ['rampUpExclusionMs', 0, 2000],
     ['throughputThreads', 0, 64],
   ];
 

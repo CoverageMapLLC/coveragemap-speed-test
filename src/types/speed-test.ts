@@ -36,7 +36,14 @@ export interface SpeedSnapshot {
 
 export interface SpeedTestData {
   durationMs: number;
+  /**
+   * Measured from `rampUpExclusionMs` after the stage's first bytes to its end, so the ramp-up
+   * does not count. Equals `overallSpeedMbps` when the stage ended before that point or the
+   * exclusion is 0.
+   */
   speedMbps: number;
+  /** Over the whole stage, less the latency bias (`latencyMs + jitterMs`). */
+  overallSpeedMbps: number;
   bytes: number;
   snapshots: SpeedSnapshot[];
   loadedLatency: LatencyTestData | null;
@@ -49,6 +56,13 @@ export interface SpeedTestConfig {
   snapshotIntervalMs: number;
   latencyTimeoutMs: number;
   estimationTimeoutMs: number;
+  /**
+   * The download and upload speeds are measured from this long after the stage's first bytes
+   * (the first acknowledgement, for upload), so the slow start of a connection does not lower
+   * them. The stage still lasts its full duration, and the loaded latency pings start at that
+   * point. `0` measures the whole stage. Defaults to 250 ms, valid from 0 to 2000.
+   */
+  rampUpExclusionMs?: number;
   /**
    * Threads the download and upload stages spread their sockets across when the estimated
    * speed is 1 Gbps or more. `0` (the default) chooses automatically, `1` keeps every socket
@@ -91,6 +105,7 @@ export const DEFAULT_CONFIG: SpeedTestConfig = {
   snapshotIntervalMs: 100,
   latencyTimeoutMs: 10000,
   estimationTimeoutMs: 15000,
+  rampUpExclusionMs: 250,
   throughputThreads: 0,
   transport: 'auto',
   browserWorker: true,

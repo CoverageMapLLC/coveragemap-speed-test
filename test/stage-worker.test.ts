@@ -299,6 +299,29 @@ describe('startStageWorker (engine side)', () => {
     }
   });
 
+  it('passes the ramp-up exclusion to throughput stages in the worker', async () => {
+    const serverUrl = await startServer();
+    const worker = channelWorker();
+    const runner = await startedRunner(worker);
+    const data = await runner.runDownloadSpeedTest({
+      serverUrl,
+      messageSizeKb: 64,
+      connectionCount: 2,
+      durationMs: 600,
+      latencyMs: 0,
+      jitterMs: 0,
+      rampUpExclusionMs: 100,
+      cancellationToken: new CancellationToken(),
+    });
+    expect(worker.commands).toContainEqual(
+      expect.objectContaining({ type: 'run', stage: 'download', options: expect.objectContaining({ rampUpExclusionMs: 100 }) })
+    );
+    expect(data.speedMbps).toBeGreaterThan(0);
+    expect(data.overallSpeedMbps).toBeGreaterThan(0);
+    // The link was loaded 100 ms after the first byte, well inside the stage.
+    expect(data.loadedLatency).not.toBeNull();
+  });
+
   it('cancels a stage in the worker and rejects at once', async () => {
     const serverUrl = await startServer();
     const worker = channelWorker();

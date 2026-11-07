@@ -133,6 +133,8 @@ describe('throughput protocol runners', () => {
       latencyMs: 1,
       jitterMs: 1,
       snapshotIntervalMs: 10,
+      // Loaded latency pings from the first byte, inside this short stage.
+      rampUpExclusionMs: 0,
       cancellationToken: new CancellationToken(),
       onSnapshot: (snapshot) => snapshots.push(snapshot.bytes),
     });
@@ -299,6 +301,7 @@ describe('throughput protocol runners', () => {
       latencyMs: 1,
       jitterMs: 1,
       snapshotIntervalMs: 10,
+      rampUpExclusionMs: 0,
       cancellationToken: new CancellationToken(),
     });
 

@@ -198,6 +198,51 @@ describe('openWorkerLanes', () => {
     expect(LaneSocketMock.instances.length).toBeLessThanOrEqual(7);
   });
 
+  it('reports the first bytes of each lane once through onBytes', async () => {
+    const events = callbacks();
+    const reported: number[] = [];
+    const lanes = await openWorkerLanes(
+      'download',
+      { serverUrl: SERVER_URL, connectionCount: 4, messageSizeKb: 2, threads: 2 },
+      { ...events, onBytes: (bytes) => reported.push(bytes) }
+    );
+    expect(reported).toEqual([]);
+    for (const lane of lanes!) lane.start();
+    await expect.poll(() => reported.length).toBe(2);
+    expect(reported.every((bytes) => bytes >= 2048)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(reported).toHaveLength(2);
+    for (const lane of lanes!) lane.close();
+  });
+
+  it('starts the ramp-up exclusion and loaded latency from bytes counted on worker threads', async () => {
+    const base = {
+      serverUrl: SERVER_URL,
+      messageSizeKb: 2,
+      connectionCount: 4,
+      durationMs: 150,
+      latencyMs: 1,
+      jitterMs: 1,
+      threads: 2,
+      cancellationToken: new CancellationToken(),
+    };
+    const loaded = await runDownloadSpeedTest({ ...base, rampUpExclusionMs: 0 });
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(loaded.bytes).toBe(4 * 2048);
+    expect(loaded.speedMbps).toBe(loaded.overallSpeedMbps);
+    expect(loaded.loadedLatency).not.toBeNull();
+
+    FakeWorker.instances = [];
+    LaneSocketMock.instances = [];
+    // Every byte arrives at once at the start, so nothing is counted after the measurement start.
+    const excluded = await runDownloadSpeedTest({ ...base, rampUpExclusionMs: 30 });
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(excluded.bytes).toBe(4 * 2048);
+    expect(excluded.speedMbps).toBe(0);
+    expect(excluded.overallSpeedMbps).toBeGreaterThan(0);
+    expect(excluded.loadedLatency).not.toBeNull();
+  });
+
   it('reports a socket failure after the lanes were handed over through onError', async () => {
     const events = callbacks();
     const lanes = await openWorkerLanes('download', { serverUrl: SERVER_URL, connectionCount: 4, messageSizeKb: 2, threads: 2 }, events);

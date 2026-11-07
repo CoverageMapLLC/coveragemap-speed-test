@@ -22,6 +22,7 @@ describe('test summary selection', () => {
       downloadResult: {
         durationMs: 2000,
         speedMbps: 120,
+        overallSpeedMbps: 115,
         bytes: 4_000_000,
         snapshots: [],
         loadedLatency: { ...mockLoadedLatency, medianLatency: 45 },
@@ -29,6 +30,7 @@ describe('test summary selection', () => {
       uploadResult: {
         durationMs: 2000,
         speedMbps: 60,
+        overallSpeedMbps: 57,
         bytes: 2_000_000,
         snapshots: [],
         loadedLatency: { ...mockLoadedLatency, medianLatency: 52 },
