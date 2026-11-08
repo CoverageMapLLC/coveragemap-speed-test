@@ -38,7 +38,12 @@ export interface ThroughputLane {
 
 export type ThroughputDirection = 'download' | 'upload';
 
+/** Messages each download `START` asks for. */
 const DOWNLOAD_ITERATION_COUNT = 500;
+/** A download socket asks for more once this many requested messages or fewer are still due. */
+const DOWNLOAD_REFILL_THRESHOLD = 100;
+/** Each download refill asks for messages this many times the size of the previous request. */
+const DOWNLOAD_MESSAGE_SIZE_GROWTH = 3;
 const MAX_DOWNLOAD_MESSAGE_SIZE_KB = 5 * 1024;
 const MAX_UPLOAD_CHUNK_SIZE = 1024 * 1024;
 const UPLOAD_REFILL_INTERVAL_MS = 5;
@@ -114,9 +119,18 @@ function connectLane(
   return sockets;
 }
 
+/** The message size of the next download request: three times the last one, at most 5 MB. */
+export function getNextDownloadMessageSizeKb(messageSizeKb: number): number {
+  return Math.min(messageSizeKb * DOWNLOAD_MESSAGE_SIZE_GROWTH, MAX_DOWNLOAD_MESSAGE_SIZE_KB);
+}
+
 /**
- * Download lane. Each socket requests `START <kb> 500` and, once all 500 frames of a batch
- * arrive, requests the next batch with twice the frame size up to 5 MB.
+ * Download lane. Each socket requests `START <kb> 500` and keeps a running total of the
+ * messages it has requested but not yet received. Once 100 or fewer are still due it requests
+ * 500 more at three times the size (up to 5 MB) without waiting, so the server always has a
+ * batch queued. The server sends overlapping batches at once, so their messages interleave
+ * and differ in size; only the running total matters. Messages beyond everything requested,
+ * and messages after the lane closed, are not counted.
  */
 export function openDownloadLane(
   options: ThroughputLaneOptions,
@@ -124,30 +138,30 @@ export function openDownloadLane(
 ): ThroughputLane {
   let bytes = 0;
   let closed = false;
-  const packetsRemainingBySocket = new Map<WebSocket, number>();
+  const outstandingBySocket = new Map<WebSocket, number>();
   const messageSizeKbBySocket = new Map<WebSocket, number>();
 
   const sendDownloadRequest = (socket: WebSocket, requestMessageSizeKb: number) => {
     if (closed || socket.readyState !== SOCKET_OPEN) return;
-    socket.send(`START ${requestMessageSizeKb} ${DOWNLOAD_ITERATION_COUNT}`);
-    packetsRemainingBySocket.set(socket, DOWNLOAD_ITERATION_COUNT);
+    // Counted before sending, so a message handled during send() already sees the request.
+    outstandingBySocket.set(socket, (outstandingBySocket.get(socket) ?? 0) + DOWNLOAD_ITERATION_COUNT);
     messageSizeKbBySocket.set(socket, requestMessageSizeKb);
+    socket.send(`START ${requestMessageSizeKb} ${DOWNLOAD_ITERATION_COUNT}`);
   };
 
   const sockets = connectLane('download', options, callbacks, () => closed, (socket) => {
     socket.onmessage = (event) => {
-      if (!(event.data instanceof ArrayBuffer)) return;
-      const currentPacketsRemaining = packetsRemainingBySocket.get(socket) ?? 0;
-      if (currentPacketsRemaining <= 0) return;
+      if (closed || !(event.data instanceof ArrayBuffer)) return;
+      const outstanding = outstandingBySocket.get(socket) ?? 0;
+      if (outstanding <= 0) return;
 
       bytes += event.data.byteLength;
       callbacks.onBytes?.(bytes);
-      const packetsRemaining = currentPacketsRemaining - 1;
-      packetsRemainingBySocket.set(socket, packetsRemaining);
+      outstandingBySocket.set(socket, outstanding - 1);
 
-      if (packetsRemaining === 0) {
-        const currentMessageSizeKb = messageSizeKbBySocket.get(socket) ?? options.messageSizeKb;
-        sendDownloadRequest(socket, Math.min(currentMessageSizeKb * 2, MAX_DOWNLOAD_MESSAGE_SIZE_KB));
+      if (outstanding - 1 <= DOWNLOAD_REFILL_THRESHOLD) {
+        const lastMessageSizeKb = messageSizeKbBySocket.get(socket) ?? options.messageSizeKb;
+        sendDownloadRequest(socket, getNextDownloadMessageSizeKb(lastMessageSizeKb));
       }
     };
   });

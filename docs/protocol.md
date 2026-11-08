@@ -440,11 +440,24 @@ Client ──── "START <kb> 500" ──────────────�
 Client ──── "START <kb> 500" ──────────────────────► Socket N
                                                         │
 Client ◄─── binary frame ◄─── binary frame ◄──── binary frame ─── ...
-Client ◄─── binary frame ◄─── binary frame ◄──── binary frame ─── ...
+  [400 frames received: 100 still due]
+Client ──── "START <kb × 3> 500" ──────────────────► Socket 0   (first batch still sending)
+Client ◄─── <kb> frame ◄─── <kb × 3> frame ◄─── <kb> frame ◄─── <kb × 3> frame ─── ...
   [continuous streaming for durationMs, all sockets in parallel]
 ```
 
-The `500` iteration count instructs the server to send 500 frames per `START`. Each frame is approximately `<kb>` kilobytes. When a socket has received all 500 frames it requests the next batch with twice the frame size, up to 5 MB. The test's wall-clock `durationMs` timer ends the stage regardless of how many frames were received.
+The `500` iteration count instructs the server to send 500 frames per `START`. Each frame is approximately `<kb>` kilobytes. Each socket keeps a running total of the frames it has requested but not received: every `START` adds 500 and every frame received subtracts 1. Once 100 or fewer are still due, the socket sends the next `START` at once, with three times the size of its previous request (at most 5 MB), so the server always has the next batch before the current one runs out and the link never idles between batches. That request adds 500 to the total, so the next one follows when it is back down to 100.
+
+The server starts sending a new batch immediately, alongside the one still in progress, so whole frames of the two batches interleave and differ in size. The client does not rely on batch order or frame size; only the running total matters. Frames beyond everything requested are not counted. The test's wall-clock `durationMs` timer ends the stage regardless of how many frames were received, and no request goes out after it.
+
+```
+outstanding = 0
+request(kb):  outstanding += 500; lastKb = kb; send "START <kb> 500"
+start:        request(messageSizeKb)
+on frame:     if outstanding = 0: ignore
+              count its bytes; outstanding -= 1
+              if outstanding <= 100 and the stage is running: request(min(lastKb × 3, 5120))
+```
 
 When the stage ends, each download socket sends the text command `CLOSE` before closing. The server ends the connection at once instead of first delivering every frame it has already queued, which on a slow link would otherwise occupy the downlink well into the next stage. Servers that do not know the command ignore it.
 

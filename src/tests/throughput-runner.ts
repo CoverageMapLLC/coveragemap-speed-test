@@ -147,6 +147,9 @@ export function runThroughputTest(
       const elapsed = performance.now() - testStartTime;
       const bytes = totalBytes();
       const speedMbps = speed(bytes, elapsed);
+      // The stage is over: stop traffic now, so no refill goes out while the loaded latency
+      // monitor waits for its last PONG.
+      for (const lane of lanes ?? []) lane.close();
 
       let loadedLatency: LatencyTestData | null = null;
       try {
