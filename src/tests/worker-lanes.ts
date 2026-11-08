@@ -31,6 +31,8 @@ export type WorkerToHostMessage =
   | { type: 'ready' }
   | { type: 'unsupported' }
   | { type: 'open' }
+  /** The lane counted its first bytes, sent once: the runner starts the ramp-up exclusion. */
+  | { type: 'bytes' }
   | { type: 'error'; message: string };
 
 export type HostToWorkerMessage = { type: 'start' } | { type: 'close' };
@@ -77,12 +79,19 @@ export async function hostWorkerLane(port: LanePort, data: WorkerLaneData): Prom
   }
 
   const counters = new BigInt64Array(data.counters);
+  let reportedBytes = false;
   let lane: ThroughputLane;
   try {
     lane = openThroughputLane(data.direction, data, {
       onOpen: () => port.postMessage({ type: 'open' }),
       onError: (error) => port.postMessage({ type: 'error', message: error.message }),
-      onBytes: (bytes) => Atomics.store(counters, data.slot, BigInt(bytes)),
+      onBytes: (bytes) => {
+        Atomics.store(counters, data.slot, BigInt(bytes));
+        if (!reportedBytes) {
+          reportedBytes = true;
+          port.postMessage({ type: 'bytes' });
+        }
+      },
     });
   } catch (error) {
     port.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });
@@ -206,6 +215,10 @@ export async function openWorkerLanes(
           case 'open':
             if (state === 'resolved') callbacks.onOpen();
             else pendingOpens++;
+            break;
+          case 'bytes':
+            // Lanes only count bytes after they start, which is after they were handed over.
+            if (state === 'resolved') callbacks.onBytes?.(Number(Atomics.load(counterView, slot)));
             break;
           case 'error':
             // A socket failed to connect. That fails the stage whether or not every worker

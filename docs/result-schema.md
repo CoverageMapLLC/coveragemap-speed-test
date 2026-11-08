@@ -318,9 +318,11 @@ interface NetworkTestResultSpeedTimePair {
 }
 ```
 
-`downloadList` and `uploadList` are time-series samples (time offset, speed, bytes). `failedReason` / `failedStage` are set when the run does not complete successfully.
+`downloadSpeed` and `uploadSpeed` are the stages' `speedMbps`: measured from 250 ms after the stage's first counted bytes to its end, so the ramp-up at the start does not count. `totalDownload` and `totalUpload` are the whole stage's bytes. A stage that ended before that point is measured as a whole.
 
-`loadedDownloadLatencies` and `loadedUploadLatencies` are the individual RTT samples (in milliseconds, rounded to 3 decimal places) collected by the loaded latency monitor that ran concurrently during each throughput stage. Each element corresponds to one PING/PONG round trip measured while the link was saturated. Both fields are `null` when the corresponding stage was not run or when no ping round trips completed before the stage ended.
+`downloadList` and `uploadList` are time-series samples (time offset, speed, bytes). Their speeds follow the same rule as the final speed: over the whole stage until the measurement start, from the measurement start afterwards. `failedReason` / `failedStage` are set when the run does not complete successfully.
+
+`loadedDownloadLatencies` and `loadedUploadLatencies` are the individual RTT samples (in milliseconds, rounded to 3 decimal places) collected by the loaded latency monitor during each throughput stage, from 1 s after the stage's first counted bytes on. Each element corresponds to one PING/PONG round trip measured while the link was saturated. Both fields are `null` when the corresponding stage was not run or when no ping round trips completed before the stage ended (including a stage that ended before that delay).
 
 ## `stages`
 

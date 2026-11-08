@@ -20,7 +20,10 @@ export interface ThroughputLaneCallbacks {
   onOpen: () => void;
   /** A socket failed before the lane opened. */
   onError: (error: Error) => void;
-  /** The byte count changed. */
+  /**
+   * Bytes were counted; `bytes` is the lane's total. Lanes on the calling thread report every
+   * change, lanes on worker threads only their first bytes.
+   */
   onBytes?: (bytes: number) => void;
 }
 

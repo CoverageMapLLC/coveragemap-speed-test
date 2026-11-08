@@ -4,23 +4,31 @@ import { roundTo3Decimals } from '../utils/speed.js';
 import { computeLatencyData } from './latency-test.js';
 import { SOCKET_CLOSED, SOCKET_OPEN, openSocket } from './sockets.js';
 
-const DEFAULT_PING_INTERVAL_MS = 1000;
+export const DEFAULT_LOADED_LATENCY_PING_INTERVAL_MS = 500;
 const STOP_GRACE_MS = 100;
 
 export interface LoadedLatencyTestOptions {
   serverUrl: string;
+  /** Wait between a `PONG` and the next `PING`. Defaults to 500 ms. */
   pingIntervalMs?: number;
   cancellationToken: CancellationToken;
   onPing?: (latencyMs: number, index: number) => void;
 }
 
+/**
+ * Measures latency under load on one extra socket. `start` connects; the first `PING` waits for
+ * `linkLoaded`, so the samples measure the link while it carries the stage's traffic rather than
+ * while it is still idle.
+ */
 export interface LoadedLatencyMonitor {
   start: () => void;
+  /** The stage's traffic is up to speed: ping now, or as soon as the socket opens. */
+  linkLoaded: () => void;
   stop: () => Promise<LatencyTestData | null>;
 }
 
 export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): LoadedLatencyMonitor {
-  const { serverUrl, pingIntervalMs = DEFAULT_PING_INTERVAL_MS, cancellationToken, onPing } = options;
+  const { serverUrl, pingIntervalMs = DEFAULT_LOADED_LATENCY_PING_INTERVAL_MS, cancellationToken, onPing } = options;
 
   let socket: WebSocket | null = null;
   const pingTimes: number[] = [];
@@ -28,6 +36,7 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
   let pingTimer: ReturnType<typeof setTimeout> | null = null;
   let isRunning = false;
   let isStopped = false;
+  let isLoaded = false;
   let stopPromise: Promise<LatencyTestData | null> | null = null;
   let stopResolve: ((data: LatencyTestData | null) => void) | null = null;
   let stopReject: ((error: Error) => void) | null = null;
@@ -113,7 +122,7 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
       }
 
       socket.onopen = () => {
-        sendPing();
+        if (isLoaded) sendPing();
       };
 
       socket.onmessage = (event) => {
@@ -147,6 +156,12 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
           completeStop();
         }
       };
+    },
+
+    linkLoaded() {
+      if (isLoaded || isStopped || !isRunning) return;
+      isLoaded = true;
+      sendPing();
     },
 
     stop(): Promise<LatencyTestData | null> {

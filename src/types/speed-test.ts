@@ -36,6 +36,11 @@ export interface SpeedSnapshot {
 
 export interface SpeedTestData {
   durationMs: number;
+  /**
+   * Measured from 250 ms after the stage's first counted bytes to its end, so the ramp-up does
+   * not count. A stage that ended before that point is measured as a whole, less the latency
+   * bias (`latencyMs + jitterMs`).
+   */
   speedMbps: number;
   bytes: number;
   snapshots: SpeedSnapshot[];

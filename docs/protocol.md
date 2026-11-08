@@ -53,7 +53,8 @@ Each phase is designed to be cancellable, resilient to transient failures, and p
 | Goal | Implementation |
 |---|---|
 | Stable, repeatable measurements | Separate low-cost "estimation" pass from full-throughput pass |
-| Latency-aware throughput | Subtract RTT bias from all duration measurements |
+| Latency-aware throughput | Subtract RTT bias from estimation and whole-stage durations |
+| Sustained throughput, not ramp-up | Measure download and upload speeds from 250 ms after the first bytes |
 | Prevent measurement collapse on fast links | Adaptive payload sizing scales from 1 KB to 1 MB |
 | Parallel throughput saturation | Multi-socket concurrency (1–12 sockets) derived from estimation, spread across worker threads in Node.js for multi-gigabit stages |
 | Backpressure safety on upload | Keep `bufferedAmount` at two chunks and cap unacknowledged chunks per socket |
@@ -254,8 +255,8 @@ engine.run() called
        │
        ├─ Stage 3: download ────────────────────────────────────────────┐
        │    │  N parallel sockets, sustained binary streaming           │
-       │    │  + 1 dedicated socket, PING/PONG every 1000 ms           │
-       │    │  → SpeedTestData (speedMbps, bytes, snapshots[],         │
+       │    │  + 1 dedicated socket, PING/PONG every 500 ms once loaded │
+       │    │  → SpeedTestData (speedMbps, bytes, snapshots[],          │
        │    │                   loadedLatency)                          │
        │    └────────────────────────────────────────────────────────────┘
        │
@@ -268,8 +269,8 @@ engine.run() called
        │
        └─ Stage 5: upload ──────────────────────────────────────────────┐
             │  N parallel sockets, continuous binary sending            │
-            │  + 1 dedicated socket, PING/PONG every 1000 ms           │
-            │  → SpeedTestData (speedMbps, bytes, snapshots[],         │
+            │  + 1 dedicated socket, PING/PONG every 500 ms once loaded │
+            │  → SpeedTestData (speedMbps, bytes, snapshots[],          │
             │                   loadedLatency)                          │
             └────────────────────────────────────────────────────────────┘
 
@@ -454,32 +455,44 @@ A single JavaScript thread cannot receive or send much more than about 5 Gbps ov
 #### Measurement Model
 
 ```
-testStartTime = performance.now()
+testStartTime = performance.now()          (every socket is open; traffic starts)
+
+stageSpeed(bytes, elapsed) = bytes / (max(elapsed - (latencyMs + jitterMs), 1) * 125)
+
+when the first bytes of the stage are counted:
+  250 ms later (the ramp-up exclusion), unless the stage has ended:
+    fromMs = now - testStartTime
+    fromBytes = totalBytes
+  1000 ms later (the loaded latency delay), unless the stage has ended:
+    the link is loaded (loaded latency pings start, see below)
+
+speed(bytes, elapsed) =
+  fromMs set and elapsed > fromMs ? (bytes - fromBytes) / ((elapsed - fromMs) * 125)
+                                  : stageSpeed(bytes, elapsed)
 
 every snapshotIntervalMs (default 100ms):
   elapsed = now - testStartTime
-  effectiveDurationMs = max(elapsed - (latencyMs + jitterMs), 1)
-  speedMbps = totalBytes / (effectiveDurationMs * 125)
-  emit SpeedSnapshot { timeOffsetMs: elapsed, speedMbps, bytes: totalBytes }
+  emit SpeedSnapshot { timeOffsetMs: elapsed, speedMbps: speed(totalBytes, elapsed), bytes: totalBytes }
 
-after durationMs:
+after durationMs (from testStartTime, not from the first bytes):
   elapsed = now - testStartTime
-  effectiveDurationMs = max(elapsed - (latencyMs + jitterMs), 1)
-  final speedMbps = totalBytes / (effectiveDurationMs * 125)
-  resolve { durationMs: elapsed, speedMbps, bytes: totalBytes, snapshots }
+  resolve { durationMs: elapsed, speedMbps: speed(totalBytes, elapsed), bytes: totalBytes, snapshots }
 ```
 
-All sockets accumulate into a single `totalBytes` counter. The final speed is computed from the aggregate data across all connections.
+All sockets accumulate into a single `totalBytes` counter. The final speed is computed from the aggregate data across all connections. Speeds are rounded to 3 decimal places.
+
+The ramp-up at the start of a stage, while the connections speed up, is left out of `speedMbps`: it is measured from 250 ms after the first bytes are counted (the first binary frame for download, the first `ACK` for upload) to the stage's end. Everything after that point counts, so a ramp-up longer than the exclusion still lowers the speed, and the wait for the first byte is already excluded, so no latency bias is subtracted. Before that point, or when the stage ends before it, the speed is the whole stage's. Snapshots switch formula at the same point, so the final value continues the last progress values. Both the 250 ms exclusion and the 1 s loaded latency delay are fixed; applications cannot configure them. With worker threads, each worker tells the main thread once when its lane counts its first bytes, and the main thread does all the timing.
 
 #### Loaded Latency Monitor
 
-A dedicated WebSocket connection is opened to the same server at the start of Stage 3. It sends a single `PING` text frame immediately on connect, then sends another `PING` every 1,000 ms after each `PONG` is received. RTT is measured with `performance.now()` at send and receive time.
+A dedicated WebSocket connection is opened to the same server at the start of Stage 3. Its first `PING` text frame waits until the link carries the stage's traffic: 1,000 ms after the stage's first bytes are counted. This delay is separate from the ramp-up exclusion of the speed (see [Measurement Model](#measurement-model)). Pinging from the stage start would measure a link that is still idle. If the socket is not open yet at that point, it pings as soon as it opens. It then sends another `PING` 500 ms after each `PONG` is received. RTT is measured with `performance.now()` at send and receive time.
 
 ```
-[Stage 3 starts]
+[Stage 3 starts]                 → open LoadedLatencySocket, no PING yet
+[1,000 ms after the first bytes]
 LoadedLatencySocket ──── "PING" ──────────────────────────────► Server
 LoadedLatencySocket ◄─── "PONG" ───────────────────────────── Server
-  [wait 1000 ms]
+  [wait 500 ms]
 LoadedLatencySocket ──── "PING" ──────────────────────────────► Server
 LoadedLatencySocket ◄─── "PONG" ───────────────────────────── Server
   ... (repeated until stage timer fires)
@@ -493,7 +506,7 @@ LoadedLatencySocket ◄─── "PONG" ─────────────�
 
 Because these probes run while the download sockets are saturating the link, the resulting RTT values reflect latency **under load** rather than idle baseline latency. Compare `loadedLatency.minLatency` against the pre-test `LatencyTestData.minLatency` to measure the latency increase caused by congestion.
 
-`loadedLatency` is `null` in the result if no PONG was received before the monitor stopped (e.g. the connection took longer to open than the stage duration).
+`loadedLatency` is `null` in the result if no PONG was received before the monitor stopped (e.g. the stage ended less than 1,000 ms after its first bytes, or the connection took longer to open than the stage).
 
 #### Defaults
 
@@ -501,8 +514,10 @@ Because these probes run while the download sockets are saturating the link, the
 |---|---|---|
 | `downloadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
+| Ramp-up exclusion after the first bytes | 250 ms | (fixed) |
+| Loaded latency delay after the first bytes | 1,000 ms | (fixed) |
 | Iterations per START | 500 | (fixed) |
-| Loaded latency ping interval | 1,000 ms | (fixed) |
+| Loaded latency ping interval | 500 ms | (fixed) |
 | Loaded latency grace period | 100 ms | (fixed) |
 
 ---
@@ -606,11 +621,11 @@ A refill stops after 4 ms of work, and acknowledgements that arrive together sha
 
 #### Loaded Latency Monitor
 
-Identical in design to the download stage loaded latency monitor. A dedicated PING/PONG WebSocket connection runs for the full duration of Stage 5, probing every 1,000 ms. The collected RTTs are attached to the upload result as `SpeedTestData.loadedLatency`. See the [download stage loaded latency description](#loaded-latency-monitor) for the full exchange sequence and timing details.
+Identical in design to the download stage loaded latency monitor. A dedicated PING/PONG WebSocket connection opens when Stage 5 starts and probes from 1,000 ms after the first `ACK`, then 500 ms after each `PONG`. The collected RTTs are attached to the upload result as `SpeedTestData.loadedLatency`. See the [download stage loaded latency description](#loaded-latency-monitor) for the full exchange sequence and timing details.
 
 #### Measurement Model
 
-Identical to download: `snapshotIntervalMs` periodic snapshots and a wall-clock `durationMs` deadline.
+Identical to download: `snapshotIntervalMs` periodic snapshots, a wall-clock `durationMs` deadline, and the speed measured from 250 ms after the first bytes, which for upload is the first `ACK`.
 
 #### Defaults
 
@@ -619,8 +634,10 @@ Identical to download: `snapshotIntervalMs` periodic snapshots and a wall-clock 
 | `uploadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
 | Refill timer | 5 ms | (fixed) |
+| Ramp-up exclusion after the first `ACK` | 250 ms | (fixed) |
+| Loaded latency delay after the first `ACK` | 1,000 ms | (fixed) |
 | Max chunk size | 1 MB | (fixed) |
-| Loaded latency ping interval | 1,000 ms | (fixed) |
+| Loaded latency ping interval | 500 ms | (fixed) |
 | Loaded latency grace period | 100 ms | (fixed) |
 
 ---
@@ -650,7 +667,7 @@ This is applied consistently at both snapshot sampling time and final result ass
 
 ## Timing Normalization
 
-Raw measured durations include network round-trip overhead that isn't part of the data transfer itself. All throughput stages remove this bias by subtracting the latency and jitter baselines measured in Stage 1:
+Raw measured durations include network round-trip overhead that isn't part of the data transfer itself. The estimation stages, and the throughput stages' `speedMbps` until the measurement start (or for a stage that ends before it), remove this bias by subtracting the latency and jitter baselines measured in Stage 1. A throughput `speedMbps` measured from 250 ms after the first bytes needs no correction, since that point is already past the wait for the first byte:
 
 ```
 effectiveDurationMs = max(rawDurationMs - (minLatency + minJitter), 1)

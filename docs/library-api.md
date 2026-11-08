@@ -907,7 +907,7 @@ interface SpeedSnapshot {
 | Field | Type | Description |
 |-------|------|-------------|
 | `timeOffsetMs` | `number` | Time elapsed since the stage started, in milliseconds. |
-| `speedMbps` | `number` | Instantaneous throughput at this snapshot. |
+| `speedMbps` | `number` | Throughput so far, by the same rule as the stage's final `speedMbps`: over the whole stage until the measurement start (250 ms after the first bytes), from the measurement start afterwards. |
 | `bytes` | `number` | Cumulative bytes transferred at this snapshot. |
 
 ---
@@ -929,12 +929,12 @@ interface SpeedTestData {
 | Field | Type | Description |
 |-------|------|-------------|
 | `durationMs` | `number` | Total stage duration in milliseconds. |
-| `speedMbps` | `number` | Final throughput result in Mbps. |
+| `speedMbps` | `number` | Final throughput result in Mbps, measured from 250 ms after the stage's first counted bytes (the first `ACK`, for upload) to its end, so the slow start of the connections does not lower it. Everything after that point counts, so a ramp-up that lasts longer still lowers it. A stage that ended before that point is measured as a whole: `bytes / (max(durationMs - (latencyMs + jitterMs), 1) * 125)`. This is the value reported as `downloadSpeed` / `uploadSpeed`. See [Measurement Model](./protocol.md#measurement-model). |
 | `bytes` | `number` | Total bytes transferred during the stage. |
 | `snapshots` | `SpeedSnapshot[]` | All progress snapshots collected during the stage. |
-| `loadedLatency` | `LatencyTestData \| null` | Latency measurements collected concurrently while throughput was saturated. `null` if no pings were completed during the stage. |
+| `loadedLatency` | `LatencyTestData \| null` | Latency measurements collected concurrently while throughput was saturated. `null` if no pings were completed during the stage, including a stage that ended less than 1 s after its first bytes. |
 
-`loadedLatency` is measured by sending periodic PING/PONG probes over a dedicated WebSocket connection that runs in parallel throughout the entire download or upload stage. Because the link is under load during these probes, the values reflect real-world latency under congestion — sometimes called "bufferbloat" or "under-load latency" — rather than the idle RTT captured by the pre-test latency stage. Compare it against the pre-test [`LatencyTestData`](#latencytestdata) from `onLatencyResult` to quantify how much latency increases when the connection is saturated.
+`loadedLatency` is measured by sending PING/PONG probes, 500 ms apart, over a dedicated connection that opens when the download or upload stage starts. The first probe waits until the link carries the stage's traffic: 1 s after the stage's first counted bytes (the first `ACK`, for upload), independent of the 250 ms ramp-up exclusion of the speed. Because the link is under load during these probes, the values reflect real-world latency under congestion — sometimes called "bufferbloat" or "under-load latency" — rather than the idle RTT captured by the pre-test latency stage. Compare it against the pre-test [`LatencyTestData`](#latencytestdata) from `onLatencyResult` to quantify how much latency increases when the connection is saturated.
 
 ---
 
