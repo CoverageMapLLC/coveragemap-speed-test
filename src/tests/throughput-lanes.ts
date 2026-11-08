@@ -30,6 +30,11 @@ export interface ThroughputLaneCallbacks {
 export interface ThroughputLane {
   /** Starts traffic on every socket. */
   start(): void;
+  /**
+   * The stage ended: ask the server for nothing more (no download refill), but keep the sockets
+   * open and the traffic already requested flowing, so the link stays loaded until `close()`.
+   */
+  stopRequests(): void;
   /** Stops traffic and closes every socket. */
   close(): void;
   /** Bytes received (download) or acknowledged by the server (upload) so far. */
@@ -138,11 +143,12 @@ export function openDownloadLane(
 ): ThroughputLane {
   let bytes = 0;
   let closed = false;
+  let requestsStopped = false;
   const outstandingBySocket = new Map<WebSocket, number>();
   const messageSizeKbBySocket = new Map<WebSocket, number>();
 
   const sendDownloadRequest = (socket: WebSocket, requestMessageSizeKb: number) => {
-    if (closed || socket.readyState !== SOCKET_OPEN) return;
+    if (closed || requestsStopped || socket.readyState !== SOCKET_OPEN) return;
     // Counted before sending, so a message handled during send() already sees the request.
     outstandingBySocket.set(socket, (outstandingBySocket.get(socket) ?? 0) + DOWNLOAD_ITERATION_COUNT);
     messageSizeKbBySocket.set(socket, requestMessageSizeKb);
@@ -171,6 +177,9 @@ export function openDownloadLane(
       for (const socket of sockets) {
         sendDownloadRequest(socket, options.messageSizeKb);
       }
+    },
+    stopRequests() {
+      requestsStopped = true;
     },
     close() {
       closed = true;
@@ -278,6 +287,8 @@ export function openUploadLane(
       refillTimer = setInterval(fillAll, UPLOAD_REFILL_INTERVAL_MS);
       fillAll();
     },
+    // Upload sends no requests to stop; it keeps the link loaded until close().
+    stopRequests() {},
     close() {
       closed = true;
       if (refillTimer) clearInterval(refillTimer);

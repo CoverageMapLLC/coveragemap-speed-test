@@ -459,7 +459,7 @@ on frame:     if outstanding = 0: ignore
               if outstanding <= 100 and the stage is running: request(min(lastKb × 3, 5120))
 ```
 
-When the stage ends, each download socket sends the text command `CLOSE` before closing. The server ends the connection at once instead of first delivering every frame it has already queued, which on a slow link would otherwise occupy the downlink well into the next stage. Servers that do not know the command ignore it.
+When the stage ends, the download sockets stop requesting more messages but stay open while the loaded latency monitor waits for its last `PONG` (at most 100 ms), so that ping still measures a loaded link; bytes that arrive then are not counted. Each download socket then sends the text command `CLOSE` before closing. The server ends the connection at once instead of first delivering every frame it has already queued, which on a slow link would otherwise occupy the downlink well into the next stage. Servers that do not know the command ignore it.
 
 #### Threads
 
@@ -511,8 +511,10 @@ LoadedLatencySocket ◄─── "PONG" ─────────────�
   ... (repeated until stage timer fires)
 
 [durationMs timer fires → finishTest() called]
+  → take the stage's bytes and speed; stop download requests (no more START),
+    but keep the transfer sockets open so the link stays loaded
   → if a PING is in flight: wait up to 100 ms for final PONG (grace period)
-  → close LoadedLatencySocket
+  → close LoadedLatencySocket, then the transfer sockets
   → compute LatencyTestData from collected RTTs
   → attach as SpeedTestData.loadedLatency (null if no pings completed)
 ```

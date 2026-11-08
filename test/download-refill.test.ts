@@ -61,6 +61,9 @@ class InterleavingServerSocketMock extends ManualSocketMock {
   static startedAt: number[] = [];
   /** Sizes of the messages in the order they were sent. */
   received: number[] = [];
+  /** When each message was sent. */
+  receivedAt: number[] = [];
+  closedAt: number | null = null;
   sentBytes = 0;
   private loops: Array<ReturnType<typeof setInterval>> = [];
 
@@ -77,6 +80,7 @@ class InterleavingServerSocketMock extends ManualSocketMock {
       }
       left--;
       this.received.push(kb);
+      this.receivedAt.push(performance.now());
       this.sentBytes += kb * KB;
       this.deliver(kb);
     }, 1);
@@ -84,6 +88,7 @@ class InterleavingServerSocketMock extends ManualSocketMock {
   }
 
   close(): void {
+    this.closedAt ??= performance.now();
     for (const loop of this.loops) clearInterval(loop);
     super.close();
   }
@@ -208,6 +213,54 @@ describe('download refills', () => {
     socket.deliver(64, 10);
     expect(socket.commands).toEqual(['START 64 500', 'CLOSE']);
     expect(lane.bytes).toBe(399 * 64 * KB);
+  });
+
+  it('stops refilling but keeps the socket open and counting after stopRequests', async () => {
+    vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
+    const { lane, socket } = await openLane(64);
+    lane.start();
+    socket.deliver(64, 399);
+    lane.stopRequests();
+    // Past the refill threshold, yet no new request.
+    socket.deliver(64, 10);
+    expect(socket.commands).toEqual(['START 64 500']);
+    expect(socket.readyState).toBe(ManualSocketMock.OPEN);
+    expect(lane.bytes).toBe(409 * 64 * KB);
+    lane.close();
+    expect(socket.commands).toEqual(['START 64 500', 'CLOSE']);
+  });
+
+  it('keeps the link loaded until the last loaded latency answer, with no refill after the stage', async () => {
+    // The loaded latency socket never answers, so the stage waits 100 ms for its last PONG.
+    vi.stubGlobal('WebSocket', InterleavingServerSocketMock as unknown as typeof WebSocket);
+    const startedAt = performance.now();
+    const promise = runDownloadSpeedTest({
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      messageSizeKb: 1,
+      connectionCount: 1,
+      durationMs: 1500,
+      latencyMs: 0,
+      jitterMs: 0,
+      cancellationToken: new CancellationToken(),
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await promise;
+
+    const sockets = ManualSocketMock.instances as InterleavingServerSocketMock[];
+    const download = sockets.find((socket) => socket.commands.some((c) => c.startsWith('START')))!;
+    const latency = sockets.find((socket) => socket.commands.includes('PING'))!;
+    expect(latency.commands.filter((c) => c === 'PING').length).toBeGreaterThan(0);
+    // The download socket closed after the 100 ms wait, not when the stage ended...
+    expect(download.closedAt! - startedAt).toBeGreaterThanOrEqual(1599);
+    // ...and kept receiving until then, so the last ping measured a loaded link.
+    expect(download.receivedAt.some((at) => at - startedAt > 1550)).toBe(true);
+    // The result is the stage's: nothing after its end is counted.
+    expect(result.durationMs).toBeLessThan(1501);
+    const byStageEnd = download.received
+      .filter((_, i) => download.receivedAt[i] - startedAt <= 1500)
+      .reduce((sum, kb) => sum + kb * KB, 0);
+    expect(result.bytes).toBeLessThanOrEqual(byStageEnd);
+    expect(download.sentBytes).toBeGreaterThan(result.bytes);
   });
 
   it('sends no refill after the stage ends', async () => {

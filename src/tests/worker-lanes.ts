@@ -35,7 +35,7 @@ export type WorkerToHostMessage =
   | { type: 'bytes' }
   | { type: 'error'; message: string };
 
-export type HostToWorkerMessage = { type: 'start' } | { type: 'close' };
+export type HostToWorkerMessage = { type: 'start' } | { type: 'stopRequests' } | { type: 'close' };
 
 export interface LanePort {
   postMessage(message: WorkerToHostMessage): void;
@@ -100,6 +100,7 @@ export async function hostWorkerLane(port: LanePort, data: WorkerLaneData): Prom
 
   port.on('message', (message) => {
     if (message.type === 'start') lane.start();
+    else if (message.type === 'stopRequests') lane.stopRequests();
     else if (message.type === 'close') lane.close();
   });
   port.postMessage({ type: 'ready' });
@@ -245,6 +246,9 @@ function createWorkerLane(worker: NodeWorker, counters: BigInt64Array, slot: num
   return {
     start() {
       worker.postMessage({ type: 'start' });
+    },
+    stopRequests() {
+      if (!closed) worker.postMessage({ type: 'stopRequests' });
     },
     close() {
       if (closed) return;

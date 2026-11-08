@@ -175,6 +175,10 @@ describe('throughput threads', () => {
     expect(Atomics.load(new BigInt64Array(counters), 1)).toBe(4096n);
     expect(Atomics.load(new BigInt64Array(counters), 0)).toBe(0n);
 
+    // The stage ended: no more requests, but the sockets stay open until close.
+    send({ type: 'stopRequests' });
+    expect(LaneSocketMock.instances.every((socket) => socket.readyState === LaneSocketMock.OPEN)).toBe(true);
+
     send({ type: 'close' });
     expect(LaneSocketMock.instances.every((socket) => socket.readyState === LaneSocketMock.CLOSED)).toBe(true);
   });
