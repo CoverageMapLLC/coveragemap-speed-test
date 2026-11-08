@@ -149,6 +149,11 @@ describe('openWorkerLanes', () => {
       // Each lane's two sockets received one 2 KiB frame, read through the shared counters.
       expect(lanes!.map((lane) => lane.bytes)).toEqual([4096, 4096]);
 
+      // The stage ended: the workers stop requesting, but their sockets stay open until close.
+      for (const lane of lanes!) lane.stopRequests();
+      await vi.advanceTimersByTimeAsync(5);
+      expect(LaneSocketMock.instances.every((socket) => socket.readyState === 1)).toBe(true);
+
       for (const lane of lanes!) lane.close();
       await vi.advanceTimersByTimeAsync(5);
       expect(LaneSocketMock.instances.every((socket) => socket.readyState === 3)).toBe(true);

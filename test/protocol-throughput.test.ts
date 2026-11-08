@@ -177,7 +177,7 @@ describe('throughput protocol runners', () => {
     expect(result.loadedLatency!.minLatency).toBeGreaterThan(0);
   });
 
-  it('requests a doubled download packet size after a batch is exhausted', async () => {
+  it('requests a tripled download message size once 400 messages of the first batch arrived', async () => {
     vi.useFakeTimers();
     ReplenishingDownloadSocketMock.commands = [];
     vi.stubGlobal('WebSocket', ReplenishingDownloadSocketMock as unknown as typeof WebSocket);
@@ -195,14 +195,14 @@ describe('throughput protocol runners', () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 500', 'START 128 500']);
+    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 500', 'START 192 500']);
 
     await vi.advanceTimersByTimeAsync(39);
     const result = await promise;
     expect(result.bytes).toBe(64 * 1024 * 500);
   });
 
-  it('ignores extra download frames that arrive after a batch is exhausted', async () => {
+  it('counts a message of the next batch that arrives before the first batch is done', async () => {
     vi.useFakeTimers();
     ReentrantExtraFrameDownloadSocketMock.commands = [];
     vi.stubGlobal('WebSocket', ReentrantExtraFrameDownloadSocketMock as unknown as typeof WebSocket);
@@ -222,12 +222,13 @@ describe('throughput protocol runners', () => {
 
     expect(ReentrantExtraFrameDownloadSocketMock.commands).toEqual([
       'START 64 500',
-      'START 128 500',
+      'START 192 500',
     ]);
 
     await vi.advanceTimersByTimeAsync(39);
     const result = await promise;
-    expect(result.bytes).toBe(64 * 1024 * 500);
+    // All 500 messages of the first batch plus the one 192 KB message of the second.
+    expect(result.bytes).toBe(64 * 1024 * 500 + 192 * 1024);
   });
 
   it('completes download when loaded latency monitor receives no PONG samples', async () => {

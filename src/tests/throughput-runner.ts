@@ -144,9 +144,15 @@ export function runThroughputTest(
       }
       finishing = true;
       clearStageTimers();
+      if (snapshotTimer) clearInterval(snapshotTimer);
+      snapshotTimer = null;
       const elapsed = performance.now() - testStartTime;
       const bytes = totalBytes();
       const speedMbps = speed(bytes, elapsed);
+      // The stage is over: ask for no more data (no refill goes out after the stage), but keep
+      // the sockets open, so the loaded latency monitor's last ping still measures a loaded link
+      // while it waits for the PONG. cleanup() closes them once the monitor is done.
+      for (const lane of lanes ?? []) lane.stopRequests();
 
       let loadedLatency: LatencyTestData | null = null;
       try {
