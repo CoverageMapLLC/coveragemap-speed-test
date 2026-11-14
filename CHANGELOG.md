@@ -10,7 +10,7 @@
 
 ### Breaking Changes
 
-- **Result uploads can't be turned off**: The engine's upload members are now ES private (`#`), so a subclass that overrides `uploadResults`, `uploadBatch`, `flushUploadQueue` or `saveToLocalQueue`, or code that replaces `coverageMapApi`, no longer stops uploads. The upload starts before `onComplete`, with a copy of the result, so a callback that throws, cancels, or edits the result doesn't skip or change it. `CoverageMapApiClient.prototype` is frozen. `api.coverageMapApiBaseUrl` must be an `https://` URL on `coveragemap.com` or a subdomain, or a loopback URL when `speedApiBaseUrl` is loopback too; the constructor throws otherwise.
+- **Result uploads can't be turned off**: Completed results are always uploaded, even from subclasses or when `onComplete` throws. `api.coverageMapApiBaseUrl` must now be an `https://` URL on `coveragemap.com` or a subdomain (or loopback for a fully local setup).
 - `SpeedTestData.speedMbps`, and with it `downloadSpeed`, `uploadSpeed`, `downloadList`, and `uploadList` in the result, now leave out the ramp-up and read higher on most links.
 
 ## 0.5.0

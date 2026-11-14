@@ -1408,7 +1408,7 @@ function getCoverageMapApiBaseUrl(overrides?: ApiBaseUrlOverrides): string;
 
 `SpeedTestEngineOptions.api`, `SpeedTestApiClient`, and `CoverageMapApiClient` all accept the same optional override shape. Helpers return the resolved HTTPS base URL (trailing slashes stripped), using CoverageMap production hosts when a field is omitted.
 
-`SpeedTestEngine` only accepts a `coverageMapApiBaseUrl` on an `https://` CoverageMap host (`coveragemap.com` or a subdomain, such as a staging environment), or a loopback URL (`localhost`, `127.x.x.x`, `[::1]`) when `speedApiBaseUrl` is loopback too. Any other value throws in the constructor, so the override can't send results nowhere. `CoverageMapApiClient` itself accepts any URL; the engine's own client can't be replaced.
+`SpeedTestEngine` requires `coverageMapApiBaseUrl` to be an `https://` URL on `coveragemap.com` or a subdomain (or a loopback URL when `speedApiBaseUrl` is loopback too), and throws otherwise.
 
 `CoverageMapApiClient` constructor: `new CoverageMapApiClient(overrides?: ApiBaseUrlOverrides)`.
 
