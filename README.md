@@ -135,6 +135,8 @@ Completed test results are uploaded to CoverageMap systems (`map.coveragemap.com
 
 If an upload fails, results are queued locally and retried automatically in the background on the next run.
 
+Uploads can't be turned off. The engine starts the upload before `onComplete` runs, with a copy of the result, so a callback can't skip it or change what is uploaded. The upload code is private to the engine (ES `#` members), so subclasses can't override it, and `api.coverageMapApiBaseUrl` only accepts `https://` CoverageMap hosts (`coveragemap.com` and its subdomains), or a loopback URL when `speedApiBaseUrl` is loopback too (a fully local setup). Only a test you cancel while it runs isn't uploaded.
+
 > **Disclaimer:** All speed test results produced by this library — including measurement data, device metadata, and application identity — are uploaded to and retained by CoverageMap. By using this library, you acknowledge that result data will be used by CoverageMap to power network quality mapping, coverage analytics, and related services on [coveragemap.com](https://coveragemap.com). Do not use this library in contexts where uploading network measurement data to a third party is not permitted.
 
 ---
