@@ -444,7 +444,7 @@ interface SpeedTestCallbacks {
 | `onDownloadResult` | `data: SpeedTestData` | Fired once when the sustained download stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
 | `onUploadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained upload stage. |
 | `onUploadResult` | `data: SpeedTestData` | Fired once when the sustained upload stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
-| `onComplete` | `latencyData, downloadData, uploadData, result` | Fired after the run assembles final measurements. The first three arguments are the aggregated stage results (`null` if that stage was not run). `result` is the complete `NetworkTestResultTestResults` payload — the same object returned by `run()` and uploaded to CoverageMap. |
+| `onComplete` | `latencyData, downloadData, uploadData, result` | Fired after the run assembles final measurements. The first three arguments are the aggregated stage results (`null` if that stage was not run). `result` is the complete `NetworkTestResultTestResults` payload — the same object returned by `run()`. A copy is uploaded to CoverageMap before this callback runs, so changing `result` doesn't change the upload. |
 | `onError` | `error: Error, stage: SpeedTestStage` | Fired for non-cancellation stage failures. Cancellation does not emit this. |
 
 ---
