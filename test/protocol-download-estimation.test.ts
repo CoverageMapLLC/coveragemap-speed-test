@@ -67,18 +67,25 @@ describe('download estimation protocol', () => {
   });
 
   it('retries on socket error and succeeds on reconnect', async () => {
+    // The first socket fails and never delivers data, so the estimate must come from the retry.
     class RetrySocketMock extends DownloadEstimationSocketMock {
       static instances = 0;
+      private readonly failed: boolean;
 
       constructor(url: string) {
         super(url);
         RetrySocketMock.instances++;
-        const current = RetrySocketMock.instances;
-        if (current === 1) {
+        this.failed = RetrySocketMock.instances === 1;
+        if (this.failed) {
           setTimeout(() => {
+            this.readyState = DownloadEstimationSocketMock.CLOSED;
             this.onerror?.(new Event('error'));
           }, 0);
         }
+      }
+
+      send(payload: string | Uint8Array): void {
+        if (!this.failed) super.send(payload);
       }
     }
 

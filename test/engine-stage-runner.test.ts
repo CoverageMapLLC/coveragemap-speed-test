@@ -172,6 +172,41 @@ describe('engine stage runner', () => {
   });
 });
 
+describe('nodeWebSocket config', () => {
+  const stages = (runner: StageRunner) => [
+    runner.runLatencyTest,
+    runner.runDownloadEstimationTest,
+    runner.runUploadEstimationTest,
+    runner.runDownloadSpeedTest,
+    runner.runUploadSpeedTest,
+  ];
+
+  it('asks every stage for the Node.js WebSocket client by default', async () => {
+    const runner = scriptedRunner();
+    mocks.createStageRunner.mockResolvedValue(runner);
+    await new SpeedTestEngine({ application, config: { transport: 'wss' } }).run(server);
+    for (const stage of stages(runner)) {
+      expect((stage as ReturnType<typeof vi.fn>).mock.calls[0][0].nodeWebSocket).toBe(true);
+    }
+  });
+
+  it('asks every stage for the global WebSocket when false', async () => {
+    const runner = scriptedRunner();
+    mocks.createStageRunner.mockResolvedValue(runner);
+    await new SpeedTestEngine({ application, config: { transport: 'wss', nodeWebSocket: false } }).run(server);
+    for (const stage of stages(runner)) {
+      expect((stage as ReturnType<typeof vi.fn>).mock.calls[0][0].nodeWebSocket).toBe(false);
+    }
+  });
+
+  it('rejects values that are not booleans', () => {
+    expect(() => new SpeedTestEngine({ application, config: { nodeWebSocket: undefined } })).not.toThrow();
+    expect(
+      () => new SpeedTestEngine({ application, config: { nodeWebSocket: 1 as unknown as boolean } })
+    ).toThrow('SpeedTestEngineOptions.config.nodeWebSocket must be a boolean');
+  });
+});
+
 describe('browserWorker config', () => {
   it('defaults to true', () => {
     expect(() => new SpeedTestEngine({ application })).not.toThrow();

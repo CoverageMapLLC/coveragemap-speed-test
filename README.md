@@ -118,6 +118,7 @@ const engine = new SpeedTestEngine({
 | `config.throughputThreads` | 0–64 | `0` | Node.js worker threads for multi-gigabit stages (`0` = automatic, `1` = calling thread only) |
 | `config.transport` | `auto`, `tcp`, `ws`, `wss` | `auto` | `auto` uses the fastest transport the server offers: raw TCP in Node.js, then WebSocket, then secure WebSocket only where required (HTTPS pages) |
 | `config.browserWorker` | `true`, `false` | `true` | In browsers, run the test in a Web Worker so the page's rendering cannot slow it; the page's main thread is used where a worker cannot start |
+| `config.nodeWebSocket` | `true`, `false` | `true` | In Node.js, use the library's own WebSocket client, built for multi-gigabit tests; `false` uses `globalThis.WebSocket` (for example a proxy-aware polyfill) |
 
 **Providers** — set after construction or at the module level:
 

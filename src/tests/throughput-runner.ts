@@ -25,6 +25,8 @@ export interface ThroughputTestOptions {
   threads?: number;
   cancellationToken: CancellationToken;
   onSnapshot?: (snapshot: SpeedSnapshot) => void;
+  /** `false` opens WebSockets with `globalThis.WebSocket`, not the Node.js client. See `SpeedTestConfig.nodeWebSocket`. */
+  nodeWebSocket?: boolean;
 }
 
 /** The speed is measured from this long after the stage's first counted bytes, leaving out the ramp-up. */
@@ -59,6 +61,7 @@ export function runThroughputTest(
     threads = 1,
     cancellationToken,
     onSnapshot,
+    nodeWebSocket,
   } = options;
 
   return new Promise<SpeedTestData>((resolve, reject) => {
@@ -79,6 +82,7 @@ export function runThroughputTest(
     const loadedLatencyMonitor = createLoadedLatencyMonitor({
       serverUrl,
       cancellationToken,
+      nodeWebSocket,
     });
 
     const totalBytes = () => {
@@ -222,7 +226,7 @@ export function runThroughputTest(
       },
     };
 
-    const laneOptions = { serverUrl, connectionCount, messageSizeKb };
+    const laneOptions = { serverUrl, connectionCount, messageSizeKb, nodeWebSocket };
     const openLocalLane = () => openThroughputLane(direction, laneOptions, callbacks);
 
     const attach = (opened: ThroughputLane[]) => {

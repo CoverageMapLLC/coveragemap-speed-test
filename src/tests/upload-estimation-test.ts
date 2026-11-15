@@ -2,7 +2,7 @@ import type { SpeedEstimationResult } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
 import { createStallMonitor } from '../utils/stall-monitor.js';
-import { SOCKET_CLOSED, openSocket } from './sockets.js';
+import { SOCKET_CLOSED, openSocket, sendZeroFilled } from './sockets.js';
 
 export interface UploadEstimationTestOptions {
   serverUrl: string;
@@ -10,6 +10,8 @@ export interface UploadEstimationTestOptions {
   jitterMs: number;
   timeoutMs?: number;
   cancellationToken: CancellationToken;
+  /** `false` opens WebSockets with `globalThis.WebSocket`, not the Node.js client. See `SpeedTestConfig.nodeWebSocket`. */
+  nodeWebSocket?: boolean;
 }
 
 const TARGET_DURATION_MS = 100;
@@ -22,7 +24,7 @@ export const MAX_STALLED_ROUND_REPEATS = 3;
 export async function runUploadEstimationTest(
   options: UploadEstimationTestOptions
 ): Promise<SpeedEstimationResult> {
-  const { serverUrl, latencyMs, jitterMs, timeoutMs = 15000, cancellationToken } = options;
+  const { serverUrl, latencyMs, jitterMs, timeoutMs = 15000, cancellationToken, nodeWebSocket } = options;
 
   return new Promise<SpeedEstimationResult>((resolve, reject) => {
     let socket: WebSocket;
@@ -79,10 +81,10 @@ export async function runUploadEstimationTest(
 
       try {
         for (let i = 0; i < megabyteChunks; i++) {
-          socket.send(new Uint8Array(MAX_CHUNK_SIZE));
+          sendZeroFilled(socket, new Uint8Array(MAX_CHUNK_SIZE));
         }
         if (lastChunkSize > 0) {
-          socket.send(new Uint8Array(lastChunkSize));
+          sendZeroFilled(socket, new Uint8Array(lastChunkSize));
         }
       } catch (error) {
         if (retries < MAX_RETRIES) {
@@ -95,7 +97,7 @@ export async function runUploadEstimationTest(
     };
 
     try {
-      socket = openSocket(serverUrl);
+      socket = openSocket(serverUrl, { nodeWebSocket });
       socket.binaryType = 'arraybuffer';
     } catch (error) {
       reject(new Error(`Failed to create WebSocket: ${error}`));

@@ -13,6 +13,8 @@ export interface LoadedLatencyTestOptions {
   pingIntervalMs?: number;
   cancellationToken: CancellationToken;
   onPing?: (latencyMs: number, index: number) => void;
+  /** `false` opens WebSockets with `globalThis.WebSocket`, not the Node.js client. See `SpeedTestConfig.nodeWebSocket`. */
+  nodeWebSocket?: boolean;
 }
 
 /**
@@ -28,7 +30,7 @@ export interface LoadedLatencyMonitor {
 }
 
 export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): LoadedLatencyMonitor {
-  const { serverUrl, pingIntervalMs = DEFAULT_LOADED_LATENCY_PING_INTERVAL_MS, cancellationToken, onPing } = options;
+  const { serverUrl, pingIntervalMs = DEFAULT_LOADED_LATENCY_PING_INTERVAL_MS, cancellationToken, onPing, nodeWebSocket } = options;
 
   let socket: WebSocket | null = null;
   const pingTimes: number[] = [];
@@ -113,7 +115,7 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
       isRunning = true;
 
       try {
-        socket = openSocket(serverUrl);
+        socket = openSocket(serverUrl, { nodeWebSocket });
         socket.binaryType = 'arraybuffer';
       } catch (error) {
         isStopped = true;
