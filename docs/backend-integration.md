@@ -12,7 +12,7 @@ The package is designed to run in both browser and non-browser runtimes. In back
 - **Runtime and system telemetry** attached to each result through `device.coreSystem` — host name, process ID, platform, architecture, and runtime version.
 - **Flexible scheduling** — the engine is stateless and safe to call repeatedly in cron jobs, worker pools, or long-running polling loops.
 
-One important constraint: the engine uses WebSocket for the speed test protocol, or raw TCP when the server offers it (see `config.transport`). Your runtime must expose `globalThis.WebSocket` for servers without raw TCP, such as CDN servers. See [Providing WebSocket in Node](#providing-websocket-in-node) below for how to satisfy this in environments that do not ship it natively.
+The engine uses WebSocket for the speed test protocol, or raw TCP when the server offers it (see `config.transport`). In Node.js it brings its own clients for both, so it needs no `globalThis.WebSocket`. See [WebSocket in Node](#websocket-in-node) below.
 
 ---
 
@@ -22,45 +22,22 @@ One important constraint: the engine uses WebSocket for the speed test protocol,
 npm install @coveragemap/speed-test
 ```
 
-If you are running Node.js older than 22 (which ships WebSocket natively), also install a WebSocket polyfill:
-
-```bash
-npm install ws
-npm install --save-dev @types/ws
-```
-
 ---
 
 ## Runtime requirements
 
 | Requirement | Detail |
 |---|---|
-| Node.js version | 20 or later recommended; 22+ for native WebSocket |
+| Node.js version | 20 or later |
 | `fetch` | Available by default in Node 18+ |
-| `WebSocket` | Native in Node 22+; polyfill with `ws` on older runtimes |
+| `WebSocket` | Not needed in Node.js: the library has its own client |
 | TypeScript | Works with any modern TS config; no special settings required |
 
 ---
 
-## Providing WebSocket in Node
+## WebSocket in Node
 
-If your runtime does not expose `globalThis.WebSocket`, attach a polyfill at the very start of your entry file — before any engine import.
-
-```ts
-import { WebSocket } from 'ws';
-
-// Must be set before importing or constructing SpeedTestEngine
-globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket;
-```
-
-Node 22 and later ship `WebSocket` natively, so no polyfill is needed in those environments. You can guard the assignment if you want a single file that works across versions:
-
-```ts
-if (!('WebSocket' in globalThis)) {
-  const { WebSocket } = await import('ws');
-  globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket;
-}
-```
+In Node.js, `ws://` and `wss://` sockets come from the library's own WebSocket client, which counts download data without copying it and sends upload data without masking every byte. It needs no polyfill on any supported Node.js version, and it is what lets a two core machine measure past 10 Gbps over secure WebSocket. A `globalThis.WebSocket` polyfill such as `ws` is no longer needed and is only used if the library's client cannot load. Bun and Deno use their native `WebSocket`.
 
 ---
 

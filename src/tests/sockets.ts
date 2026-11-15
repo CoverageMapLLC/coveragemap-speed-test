@@ -3,9 +3,10 @@ import type { SpeedTestTransport } from '../types/speed-test.js';
 
 /**
  * Sockets for every test stage. The URL picks the transport: `ws://` and `wss://` use the
- * global `WebSocket`, `tcp://` uses the raw TCP socket from `@coveragemap/speed-transport`,
- * which has the same API and speaks the same protocol without WebSocket masking. Raw TCP is
- * Node.js only and needs {@link loadTcpTransport} first.
+ * global `WebSocket`, or in Node.js the library's own WebSocket client once
+ * {@link loadNodeWebSocket} has loaded it; `tcp://` uses the raw TCP socket from
+ * `@coveragemap/speed-transport`, which has the same API and speaks the same protocol without
+ * WebSocket masking. Raw TCP is Node.js only and needs {@link loadTcpTransport} first.
  */
 
 /** `readyState` values, the same for both socket types. Avoids the global `WebSocket`, which Node.js 20 lacks. */
@@ -22,13 +23,23 @@ interface TcpTransportModule {
   SpeedTransportSocket: new (url: string, options?: TcpSocketOptions) => unknown;
 }
 
+interface NodeWebSocketModule {
+  NodeWebSocket: new (url: string, options?: { connectTimeoutMs?: number }) => unknown;
+}
+
+/** A socket that can send zero-filled binary messages without building them. */
+interface ZeroFilledSender {
+  sendZeroFilled(byteLength: number): void;
+}
+
 export interface OpenSocketOptions {
   /** Raw TCP only: fail if the connection is not open by then. Defaults to the transport's 10 s. */
   connectTimeoutMs?: number;
 }
 
-// Kept in a variable so browser bundlers never try to resolve the Node-only module.
+// Kept in variables so browser bundlers never try to resolve the Node-only modules.
 const TCP_TRANSPORT_MODULE = '@coveragemap/speed-transport/client';
+const NODE_WEBSOCKET_MODULE = './node-websocket.js';
 
 /**
  * Protocols assumed for servers that do not report any: they predate the field and speak
@@ -53,6 +64,7 @@ export class SocketConnectError extends Error {
 }
 
 let tcpTransport: TcpTransportModule | null = null;
+let nodeWebSocket: NodeWebSocketModule | null = null;
 
 export function isTcpUrl(url: string): boolean {
   return url.startsWith('tcp://');
@@ -80,18 +92,50 @@ export async function loadTcpTransport(): Promise<TcpTransportModule | null> {
 }
 
 /**
- * Opens a test socket. Raw TCP sockets discard large binary payloads: tests only count their
- * bytes, so the client never copies download data.
+ * Loads the library's WebSocket client for Node.js (`node-websocket.ts`), which `openSocket`
+ * then uses for `ws://` and `wss://` instead of the global `WebSocket`. Node's built-in
+ * `WebSocket` masks every upload byte and copies every download byte in JavaScript, which
+ * holds a thread to a few Gbps. Resolves null outside Node.js (Bun and Deno keep their native
+ * `WebSocket`) or when it cannot be loaded, and the global `WebSocket` is used as before.
+ */
+export async function loadNodeWebSocket(): Promise<NodeWebSocketModule | null> {
+  if (nodeWebSocket) return nodeWebSocket;
+  if (!isNodeRuntime() || 'bun' in process.versions || 'Deno' in globalThis) return null;
+  try {
+    nodeWebSocket = (await import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_WEBSOCKET_MODULE)) as NodeWebSocketModule;
+  } catch {
+    return null;
+  }
+  return nodeWebSocket;
+}
+
+/** True when `openSocket` opens `url` with the library's own Node.js WebSocket client. */
+export function usesNodeWebSocket(url: string): boolean {
+  return !isTcpUrl(url) && nodeWebSocket !== null && isNodeRuntime();
+}
+
+/**
+ * Opens a test socket. Raw TCP sockets, and WebSockets from the Node.js client, discard large
+ * binary payloads: tests only count their bytes, so the client never copies download data.
  */
 export function openSocket(url: string, options: OpenSocketOptions = {}): WebSocket {
+  const connectTimeout = options.connectTimeoutMs ? { connectTimeoutMs: options.connectTimeoutMs } : {};
   if (isTcpUrl(url)) {
     if (!tcpTransport) throw new Error('The raw TCP transport is not loaded');
-    return new tcpTransport.SpeedTransportSocket(url, {
-      binaryPayloads: 'discard',
-      ...(options.connectTimeoutMs ? { connectTimeoutMs: options.connectTimeoutMs } : {}),
-    }) as WebSocket;
+    return new tcpTransport.SpeedTransportSocket(url, { binaryPayloads: 'discard', ...connectTimeout }) as WebSocket;
   }
+  if (usesNodeWebSocket(url)) return new nodeWebSocket!.NodeWebSocket(url, connectTimeout) as WebSocket;
   return new WebSocket(url);
+}
+
+/**
+ * Sends `chunk`, which must be all zeros, as a binary message. Sockets that can send zeros
+ * without masking or copying them (the Node.js WebSocket client) do; others get `chunk`.
+ */
+export function sendZeroFilled(socket: WebSocket, chunk: Uint8Array): void {
+  const sender = socket as WebSocket & Partial<ZeroFilledSender>;
+  if (typeof sender.sendZeroFilled === 'function') sender.sendZeroFilled(chunk.byteLength);
+  else socket.send(chunk);
 }
 
 /** The transports a server reported, or the ones assumed for servers that predate the field. */
@@ -150,6 +194,8 @@ export async function selectServerUrl(
   server: SpeedTestServer,
   transport: SpeedTestTransport = 'auto'
 ): Promise<ServerUrlSelection> {
+  // Every WebSocket of the run then uses the Node.js client, where there is one.
+  await loadNodeWebSocket();
   const tcp: ResolvedServerUrl = { url: getServerTcpUrl(server), protocol: 'TCP' };
   const ws: ResolvedServerUrl = { url: getServerWebSocketUrl(server, false), protocol: 'WS' };
   const wss: ResolvedServerUrl = { url: getServerWebSocketUrl(server, true), protocol: 'WSS' };

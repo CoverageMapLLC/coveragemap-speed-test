@@ -5,7 +5,7 @@
  * bytes.
  */
 
-import { SOCKET_CLOSED, SOCKET_OPEN, openSocket } from './sockets.js';
+import { SOCKET_CLOSED, SOCKET_OPEN, openSocket, sendZeroFilled } from './sockets.js';
 
 export interface ThroughputLaneOptions {
   serverUrl: string;
@@ -231,7 +231,7 @@ export function openUploadLane(
         socket.bufferedAmount < bufferTargetBytes;
         sent++
       ) {
-        socket.send(chunk);
+        sendZeroFilled(socket, chunk);
         unacked++;
         if (performance.now() > deadline) {
           withinBudget = false;

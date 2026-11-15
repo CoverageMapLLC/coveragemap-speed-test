@@ -57,9 +57,7 @@ export interface SpeedTestConfig {
   /**
    * Threads the download and upload stages spread their sockets across when the estimated
    * speed is 1 Gbps or more. `0` (the default) chooses automatically, `1` keeps every socket
-   * on the calling thread. Extra threads are Node.js worker threads, used with raw TCP or
-   * with Node's built-in WebSocket; a WebSocket polyfill keeps every socket on the calling
-   * thread.
+   * on the calling thread. Extra threads are Node.js worker threads, at most one per CPU core.
    */
   throughputThreads?: number;
   /**
@@ -170,7 +168,7 @@ const AUTO_THROUGHPUT_THREADS = MULTI_GIGABIT_CONNECTION_COUNT / 2;
  * Threads for a throughput stage. Below 1 Gbps one thread is plenty. The estimate comes from
  * one socket on one thread and tops out at a few Gbps, so anything above 1 Gbps may be far
  * faster: those stages use `configuredThreads`, or 6 when it is 0. Worker threads are
- * further limited to half the CPU cores.
+ * further limited to one per CPU core.
  */
 export function getThroughputThreadCount(estimatedMbps: number, configuredThreads = 0): number {
   if (estimatedMbps < MULTI_GIGABIT_MBPS) return 1;

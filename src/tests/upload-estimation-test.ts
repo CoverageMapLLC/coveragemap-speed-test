@@ -2,7 +2,7 @@ import type { SpeedEstimationResult } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
 import { createStallMonitor } from '../utils/stall-monitor.js';
-import { SOCKET_CLOSED, openSocket } from './sockets.js';
+import { SOCKET_CLOSED, openSocket, sendZeroFilled } from './sockets.js';
 
 export interface UploadEstimationTestOptions {
   serverUrl: string;
@@ -79,10 +79,10 @@ export async function runUploadEstimationTest(
 
       try {
         for (let i = 0; i < megabyteChunks; i++) {
-          socket.send(new Uint8Array(MAX_CHUNK_SIZE));
+          sendZeroFilled(socket, new Uint8Array(MAX_CHUNK_SIZE));
         }
         if (lastChunkSize > 0) {
-          socket.send(new Uint8Array(lastChunkSize));
+          sendZeroFilled(socket, new Uint8Array(lastChunkSize));
         }
       } catch (error) {
         if (retries < MAX_RETRIES) {
