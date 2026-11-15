@@ -1,6 +1,9 @@
 // @vitest-environment node
 import http from 'node:http';
+import https from 'node:https';
 import net, { type AddressInfo } from 'node:net';
+import type { TLSSocket } from 'node:tls';
+import { LOCALHOST_CERT, LOCALHOST_KEY } from './fixtures/tls-localhost.js';
 import { createSpeedTestServer } from '@coveragemap/speed-transport';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
@@ -93,12 +96,12 @@ function nextMessage(socket: NodeWebSocket): Promise<MessageEvent> {
 }
 
 /** Resolves with the error and close events of a socket that must never open. */
-function failure(socket: NodeWebSocket): Promise<{ opened: boolean; error: boolean; close: NodeWebSocketCloseEvent }> {
+function failure(socket: NodeWebSocket): Promise<{ opened: boolean; errors: number; close: NodeWebSocketCloseEvent }> {
   let opened = false;
-  let error = false;
+  let errors = 0;
   socket.onopen = () => (opened = true);
-  socket.onerror = () => (error = true);
-  return new Promise((resolve) => (socket.onclose = (close) => resolve({ opened, error, close })));
+  socket.onerror = () => errors++;
+  return new Promise((resolve) => (socket.onclose = (close) => resolve({ opened, errors, close })));
 }
 
 describe('parseWebSocketUrl', () => {
@@ -181,9 +184,73 @@ describe('NodeWebSocket', () => {
     expect(messages[0]).toBe('PONG');
     expect(messages[1]).toBeInstanceOf(ArrayBuffer);
     expect([...new Uint8Array(messages[1] as ArrayBuffer)]).toEqual([9, 8, 7]);
-    // Counted, not read: the length is right, the bytes are not copied.
+    // Counted, not read: the length is right, but the server's 0xff bytes were never copied.
     expect(messages[2]).toBeInstanceOf(ArrayBuffer);
     expect((messages[2] as ArrayBuffer).byteLength).toBe(100 * 1024);
+    expect(new Uint8Array(messages[2] as ArrayBuffer).every((byte) => byte === 0)).toBe(true);
+  });
+
+  it('fires error once and then an abnormal close when the server drops the connection after open', async () => {
+    const { url } = await startWsServer((client) => setTimeout(() => client.terminate(), 20));
+    const socket = await open(url);
+    const events = await new Promise<string[]>((resolve) => {
+      const seen: string[] = [];
+      socket.onerror = () => seen.push('error');
+      socket.onclose = (event) => resolve([...seen, `close ${event.code} ${event.wasClean}`]);
+    });
+    expect(events).toEqual(['error', 'close 1006 false']);
+  });
+
+  it('fires error once and then an abnormal close when the connection is reset after open', async () => {
+    const { url } = await startWsServer((client) =>
+      setTimeout(() => (client as unknown as { _socket: net.Socket })._socket.resetAndDestroy(), 20)
+    );
+    const socket = await open(url);
+    const events = await new Promise<string[]>((resolve) => {
+      const seen: string[] = [];
+      socket.onerror = () => seen.push('error');
+      socket.onclose = (event) => resolve([...seen, `close ${event.code}`]);
+    });
+    expect(events).toEqual(['error', 'close 1006']);
+  });
+
+  it('fires no error when the server closes cleanly', async () => {
+    const { url } = await startWsServer((client) => setTimeout(() => client.close(1000), 20));
+    const socket = await open(url);
+    const events = await new Promise<string[]>((resolve) => {
+      const seen: string[] = [];
+      socket.onerror = () => seen.push('error');
+      socket.onclose = (event) => resolve([...seen, `close ${event.code} ${event.wasClean}`]);
+    });
+    expect(events).toEqual(['close 1000 true']);
+  });
+
+  it('lets download estimation reconnect when its socket is dropped after open', async () => {
+    let connections = 0;
+    const { url } = await startWsServer((client) => {
+      const first = ++connections === 1;
+      client.on('message', (data, binary) => {
+        if (binary) return;
+        const [command, sizeKb] = String(data).split(' ');
+        if (command !== 'START') return;
+        // The first connection drops on its first request; the second one answers.
+        if (first) client.terminate();
+        else client.send(Buffer.alloc(Number(sizeKb) * 1024));
+      });
+    });
+    await loadNodeWebSocket();
+    const started = Date.now();
+    const result = await runDownloadEstimationTest({
+      serverUrl: url,
+      latencyMs: 0,
+      jitterMs: 0,
+      timeoutMs: 10_000,
+      cancellationToken: new CancellationToken(),
+    });
+    expect(result.bytes).toBeGreaterThan(0);
+    expect(connections).toBe(2);
+    // Reconnected after the 1 s retry delay, not after the 10 s timeout.
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 
   it('answers pings', async () => {
@@ -199,11 +266,14 @@ describe('NodeWebSocket', () => {
   it('closes cleanly', async () => {
     const server = await startWsServer();
     const socket = await open(server.url);
+    let errors = 0;
+    socket.onerror = () => errors++;
     const closed = new Promise<NodeWebSocketCloseEvent>((resolve) => (socket.onclose = resolve));
     socket.close();
     expect(socket.readyState).toBe(NodeWebSocket.CLOSING);
     const event = await closed;
     expect(socket.readyState).toBe(NodeWebSocket.CLOSED);
+    expect(errors).toBe(0);
     expect(event.wasClean).toBe(true);
     expect(event.code).toBe(1000);
     await expect.poll(() => server.closes).toEqual([1000]);
@@ -222,24 +292,99 @@ describe('NodeWebSocket', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
     const socket = new NodeWebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/v1/ws`);
-    const { opened, error } = await failure(socket);
-    expect([opened, error]).toEqual([false, true]);
+    const { opened, errors, close } = await failure(socket);
+    expect([opened, errors, close.code]).toEqual([false, 1, 1006]);
   });
 
   it('fails without opening when the accept key is wrong', async () => {
     const port = await startRawServer(
       'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: wrong\r\n\r\n'
     );
-    const { opened, error } = await failure(new NodeWebSocket(`ws://127.0.0.1:${port}/v1/ws`));
-    expect([opened, error]).toEqual([false, true]);
+    const { opened, errors, close } = await failure(new NodeWebSocket(`ws://127.0.0.1:${port}/v1/ws`));
+    expect([opened, errors, close.code]).toEqual([false, 1, 1006]);
   });
 
   it('gives up on a handshake that is never answered after connectTimeoutMs', async () => {
     const port = await startRawServer(null);
     const started = Date.now();
-    const { opened, error } = await failure(new NodeWebSocket(`ws://127.0.0.1:${port}/v1/ws`, { connectTimeoutMs: 200 }));
-    expect([opened, error]).toEqual([false, true]);
+    const { opened, errors, close } = await failure(new NodeWebSocket(`ws://127.0.0.1:${port}/v1/ws`, { connectTimeoutMs: 200 }));
+    expect([opened, errors, close.code]).toEqual([false, 1, 1006]);
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe('NodeWebSocket over TLS (wss://)', () => {
+  /**
+   * An HTTPS server with a `ws` server on it, speaking enough of the speed test protocol:
+   * PING -> PONG, START <kb> <count> -> frames, uploads -> ACK. Records each connection's SNI.
+   */
+  async function startSecureServer() {
+    const server = https.createServer({ cert: LOCALHOST_CERT, key: LOCALHOST_KEY });
+    const wss = new WebSocketServer({ server });
+    const servernames: Array<string | false | null | undefined> = [];
+    const uploads: Buffer[] = [];
+    wss.on('connection', (client, request) => {
+      servernames.push((request.socket as TLSSocket).servername);
+      client.on('message', (data, binary) => {
+        if (binary) {
+          uploads.push(Buffer.from(data as Buffer));
+          client.send('ACK');
+          return;
+        }
+        const [command, sizeKb, count] = String(data).split(' ');
+        if (command === 'PING') client.send('PONG');
+        if (command === 'START') {
+          for (let i = 0; i < Number(count); i++) client.send(Buffer.alloc(Number(sizeKb) * 1024, 0xff));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    cleanups.push(
+      () =>
+        new Promise<void>((resolve) => {
+          for (const client of wss.clients) client.terminate();
+          wss.close();
+          server.close(() => resolve());
+        })
+    );
+    return { port: (server.address() as AddressInfo).port, servernames, uploads };
+  }
+
+  it('connects with SNI, exchanges commands, counts downloads, and uploads zeros', async () => {
+    const server = await startSecureServer();
+    const socket = await open(`wss://localhost:${server.port}/v1/ws`, { ca: LOCALHOST_CERT });
+    expect(server.servernames).toEqual(['localhost']);
+
+    socket.send('PING');
+    expect((await nextMessage(socket)).data).toBe('PONG');
+
+    // Large frames over TLS go through the read buffer and are counted without being copied.
+    const sizes: number[] = [];
+    socket.onmessage = (event) => {
+      const data = event.data as ArrayBuffer;
+      expect(new Uint8Array(data).every((byte) => byte === 0)).toBe(true);
+      sizes.push(data.byteLength);
+    };
+    socket.send('START 512 4');
+    await expect.poll(() => sizes).toEqual([512 * 1024, 512 * 1024, 512 * 1024, 512 * 1024]);
+
+    socket.sendZeroFilled(300_000);
+    await expect.poll(() => server.uploads.length).toBe(1);
+    expect(server.uploads[0].length).toBe(300_000);
+    expect(server.uploads[0].every((byte) => byte === 0)).toBe(true);
+  });
+
+  it('sends no SNI to an IP address', async () => {
+    const server = await startSecureServer();
+    await open(`wss://127.0.0.1:${server.port}/v1/ws`, { ca: LOCALHOST_CERT });
+    expect(server.servernames).toEqual([false]);
+  });
+
+  it('checks the certificate by default: an untrusted one fails without opening', async () => {
+    const server = await startSecureServer();
+    const { opened, errors, close } = await failure(new NodeWebSocket(`wss://localhost:${server.port}/v1/ws`));
+    expect([opened, errors, close.code]).toEqual([false, 1, 1006]);
+    expect(server.servernames).toEqual([]);
   });
 });
 
@@ -286,6 +431,8 @@ describe('sockets with the Node.js WebSocket client', () => {
       expect(usesNodeWebSocket(url, false)).toBe(false);
       const socket = openSocket(url, { nodeWebSocket: false });
       expect(socket).toBeInstanceOf(CountingWebSocket);
+      // `ws` reports a socket closed while connecting as an unhandled error, so wait for open.
+      await new Promise((resolve) => (socket.onopen = resolve));
       socket.close();
 
       const cancellationToken = new CancellationToken();

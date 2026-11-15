@@ -125,9 +125,12 @@ export async function runDownloadEstimationTest(
     };
 
     const handleError = () => {
+      // The socket closed by cleanup() can still report an unclean close: nothing to retry.
+      if (settled) return;
       if (retries < MAX_RETRIES) {
         retries++;
         setTimeout(() => {
+          if (settled) return;
           try {
             socket = openSocket(serverUrl, { nodeWebSocket });
             socket.binaryType = 'arraybuffer';

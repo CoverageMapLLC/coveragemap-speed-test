@@ -358,7 +358,7 @@ For analytics and trend analysis:
 
 ## What backend mode does not support
 
-The package does not implement its own WebSocket client. Against servers that offer raw TCP it uses `@coveragemap/speed-transport` instead; against every other server it needs `globalThis.WebSocket` and fails the run without it. This is the only hard dependency on your runtime environment.
+Backend mode has no hard dependency on a `WebSocket` implementation in Node.js. Against servers that offer raw TCP it uses `@coveragemap/speed-transport`; against every other server (including CDN servers) it uses its own WebSocket client. It falls back to `globalThis.WebSocket` only if that client cannot load, or when you set `config.nodeWebSocket: false`; in those two cases a run against a server without raw TCP fails if there is no `globalThis.WebSocket` (Node.js 20 needs a polyfill such as `ws`). Bun and Deno use their native `WebSocket`. See [WebSocket in Node](#websocket-in-node).
 
 Browser-specific fields (`device.browser`, `device.os`, connection type from the Network Information API) will be null in backend results. This is expected and documented in the [Result Schema](./result-schema.md).
 

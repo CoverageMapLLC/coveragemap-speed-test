@@ -40,6 +40,11 @@ export interface NodeWebSocketOptions {
    * `ArrayBuffer` of their length. Defaults to 64 KiB.
    */
   bulkThresholdBytes?: number;
+  /**
+   * `wss://` only: the certificate authorities to trust, as `tls.connect`'s `ca` (replaces the
+   * default set). For private servers and tests; the engine never sets it.
+   */
+  ca?: string | Buffer | Array<string | Buffer>;
 }
 
 /** Close event with the fields of the WebSocket `CloseEvent`, which Node.js 20 lacks. */
@@ -121,6 +126,12 @@ export function parseWebSocketUrl(url: string): ParsedUrl {
 /**
  * WebSocket client with the browser `WebSocket` API, for the speed test stages in Node.js.
  * See the module comment for what it does differently.
+ *
+ * Errors follow Node's built-in `WebSocket`: a connection that ends without a close frame from
+ * the server (a failed connect or handshake, a reset, a server that drops the socket, a
+ * protocol error) fires `error` once, then `close` with code 1006. A clean close fires only
+ * `close`. The stages rely on this: latency fails fast and download estimation reconnects on
+ * `error`.
  */
 export class NodeWebSocket extends EventTarget {
   static readonly CONNECTING = 0;
@@ -152,6 +163,7 @@ export class NodeWebSocket extends EventTarget {
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
   private closeSent = false;
   private closeReceived = false;
+  private errorDispatched = false;
   private closeCode: number = CloseCode.Abnormal;
   private closeReason = '';
 
@@ -201,6 +213,7 @@ export class NodeWebSocket extends EventTarget {
             port: target.port,
             servername: net.isIP(target.host) ? undefined : target.host,
             ALPNProtocols: ['http/1.1'],
+            ...(options.ca ? { ca: options.ca } : {}),
             onread,
           } as tls.ConnectionOptions,
           onConnect
@@ -215,10 +228,12 @@ export class NodeWebSocket extends EventTarget {
     // Runtimes that ignore `onread` emit data events instead.
     this.socket.on('data', (chunk: Buffer) => this.onData(chunk));
     this.socket.on('error', () => {
-      if (this.readyState !== NodeWebSocket.CONNECTING) return;
+      // While closing, abort() and destroy() can emit errors of their own; the close reports
+      // an unclean end once the socket is gone.
+      if (this.readyState === NodeWebSocket.CLOSING || this.readyState === NodeWebSocket.CLOSED) return;
       // CLOSING first: an error handler that calls close() must not fail the connection again.
       this.readyState = NodeWebSocket.CLOSING;
-      this.dispatch(new Event('error'));
+      this.dispatchError();
     });
     this.socket.on('end', () => this.socket.end());
     this.socket.once('close', () => this.onSocketClose());
@@ -359,7 +374,7 @@ export class NodeWebSocket extends EventTarget {
     this.closeReason = reason;
     this.readyState = NodeWebSocket.CLOSING;
     this.sendClose(code, reason);
-    this.dispatch(new Event('error'));
+    this.dispatchError();
     this.socket.end();
     this.armCloseTimer();
   }
@@ -371,7 +386,14 @@ export class NodeWebSocket extends EventTarget {
     // CLOSING before the error event: a handler that calls close() would otherwise abort again.
     this.readyState = NodeWebSocket.CLOSING;
     this.socket.destroy();
-    if (wasConnecting) this.dispatch(new Event('error'));
+    if (wasConnecting) this.dispatchError();
+  }
+
+  /** Fires `error`, at most once per socket. */
+  private dispatchError(): void {
+    if (this.errorDispatched) return;
+    this.errorDispatched = true;
+    this.dispatch(new Event('error'));
   }
 
   private onSocketClose(): void {
@@ -380,6 +402,9 @@ export class NodeWebSocket extends EventTarget {
     this.connectTimer = null;
     this.closeTimer = null;
     this.readyState = NodeWebSocket.CLOSED;
-    this.dispatch(new NodeWebSocketCloseEvent(this.closeCode, this.closeReason, this.closeReceived && this.closeSent));
+    // No close frame from the server: the connection failed or was dropped (code 1006).
+    if (!this.closeReceived) this.dispatchError();
+    const code = this.closeReceived ? this.closeCode : CloseCode.Abnormal;
+    this.dispatch(new NodeWebSocketCloseEvent(code, this.closeReason, this.closeReceived && this.closeSent));
   }
 }
