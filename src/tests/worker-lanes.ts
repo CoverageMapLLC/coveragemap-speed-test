@@ -27,7 +27,7 @@ export interface WorkerLaneData extends ThroughputLaneOptions {
   slot: number;
   /** Source text of the calling thread's `WebSocket`, compared inside the worker. Unused for raw TCP. */
   webSocketSource: string | null;
-  /** The calling thread opens `ws://` and `wss://` with the Node.js WebSocket client. */
+  /** The calling thread opens `ws://` and `wss://` with the Node.js WebSocket client, so the worker loads it too. */
   nodeWebSocket?: boolean;
 }
 
@@ -160,7 +160,7 @@ export async function openWorkerLanes(
   callbacks: ThroughputLaneCallbacks
 ): Promise<ThroughputLane[] | null> {
   const webSocketSource = getWebSocketSource();
-  const nodeWebSocket = usesNodeWebSocket(options.serverUrl);
+  const nodeWebSocket = usesNodeWebSocket(options.serverUrl, options.nodeWebSocket !== false);
   if (!webSocketSource && !nodeWebSocket && !isTcpUrl(options.serverUrl)) return null;
   const support = await loadWorkerSupport();
   if (!support) return null;

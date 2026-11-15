@@ -361,6 +361,7 @@ interface SpeedTestConfig {
   throughputThreads?: number;
   transport?: 'auto' | 'tcp' | 'ws' | 'wss';
   browserWorker?: boolean;
+  nodeWebSocket?: boolean;
 }
 ```
 
@@ -375,6 +376,7 @@ interface SpeedTestConfig {
 | `throughputThreads` | `number` | `0` | 0 – 64 | Threads the download and upload stages spread their sockets across when the estimate is 1 Gbps or more. `0` picks automatically (6), `1` keeps every socket on the calling thread. Extra threads are Node.js worker threads, at most one per CPU core; browsers ignore it. |
 | `transport` | `string` | `'auto'` | `auto`, `tcp`, `ws`, `wss` | How sockets connect. The speed test carries no private data, so `auto` uses the fastest transport the server's `protocols` list and only encrypts where it must: [raw TCP](./protocol.md#raw-tcp-transport) in Node.js, then plain WebSocket, then secure WebSocket, which browsers need on HTTPS pages. If the first connection cannot open within 3 seconds, the run moves on to the next one. Raw TCP needs far less client CPU at multi-gigabit speeds. `tcp`, `ws`, and `wss` always use that one transport; `tcp` fails in browsers and `ws` fails on HTTPS pages. |
 | `browserWorker` | `boolean` | `true` | `true`, `false` | In browsers, runs every stage's sockets and timing in a dedicated Web Worker, so the page's own work (rendering progress, for example) cannot lower the measured speeds or inflate latency. The worker is embedded in the library and started from a `blob:` URL, so no bundler setup is needed. Where it cannot start (a Content Security Policy without `worker-src blob:`, no `Worker` support) or the page installed its own `WebSocket`, the test runs on the main thread. `false` always uses the main thread. Ignored outside browsers. See [Browser Worker](./protocol.md#browser-worker). |
+| `nodeWebSocket` | `boolean` | `true` | `true`, `false` | In Node.js, opens `ws://` and `wss://` sockets with the library's own WebSocket client, which counts download data without copying it and does not mask upload data byte by byte. `false` uses `globalThis.WebSocket` for every socket instead, for applications that need their own implementation (an HTTP proxy, extra headers, custom TLS options); a polyfill then keeps every socket on one thread. Raw TCP is unaffected. Ignored outside Node.js. See [Node.js WebSocket client](./protocol.md#nodejs-websocket-client). |
 
 ---
 

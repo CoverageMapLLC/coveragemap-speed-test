@@ -13,6 +13,8 @@ export interface ThroughputLaneOptions {
   messageSizeKb: number;
   /** Index of this lane's first socket across all lanes, used in error messages. */
   firstSocketIndex?: number;
+  /** `false` opens WebSockets with `globalThis.WebSocket`, not the Node.js client. See `SpeedTestConfig.nodeWebSocket`. */
+  nodeWebSocket?: boolean;
 }
 
 export interface ThroughputLaneCallbacks {
@@ -92,7 +94,7 @@ function connectLane(
     const index = firstIndex + i;
     let socket: WebSocket;
     try {
-      socket = openSocket(options.serverUrl);
+      socket = openSocket(options.serverUrl, { nodeWebSocket: options.nodeWebSocket });
     } catch (error) {
       closeSockets(sockets);
       throw new Error(`Failed to create ${direction} WebSocket ${index}: ${error}`);

@@ -39,6 +39,17 @@ npm install @coveragemap/speed-test
 
 In Node.js, `ws://` and `wss://` sockets come from the library's own WebSocket client, which counts download data without copying it and sends upload data without masking every byte. It needs no polyfill on any supported Node.js version, and it is what lets a two core machine measure past 10 Gbps over secure WebSocket. A `globalThis.WebSocket` polyfill such as `ws` is no longer needed and is only used if the library's client cannot load. Bun and Deno use their native `WebSocket`.
 
+If your application relies on its own `WebSocket` (one that goes through an HTTP proxy, adds headers, or sets custom TLS options), turn the library's client off and the engine uses `globalThis.WebSocket` for every socket, as before:
+
+```ts
+const engine = new SpeedTestEngine({
+  application,
+  config: { nodeWebSocket: false },
+});
+```
+
+A polyfill keeps every socket on one thread, so expect a few Gbps at most over secure WebSocket in that mode. Raw TCP servers are unaffected.
+
 ---
 
 ## Basic backend setup

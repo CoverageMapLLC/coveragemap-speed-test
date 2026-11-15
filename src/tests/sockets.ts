@@ -33,8 +33,14 @@ interface ZeroFilledSender {
 }
 
 export interface OpenSocketOptions {
-  /** Raw TCP only: fail if the connection is not open by then. Defaults to the transport's 10 s. */
+  /** Raw TCP and the Node.js WebSocket client: fail if the connection is not open by then (10 s by default). */
   connectTimeoutMs?: number;
+  /**
+   * `ws://` and `wss://` in Node.js: use the library's WebSocket client once it is loaded
+   * (`true`, the default) or always `globalThis.WebSocket` (`false`). See
+   * `SpeedTestConfig.nodeWebSocket`.
+   */
+  nodeWebSocket?: boolean;
 }
 
 // Kept in variables so browser bundlers never try to resolve the Node-only modules.
@@ -109,9 +115,12 @@ export async function loadNodeWebSocket(): Promise<NodeWebSocketModule | null> {
   return nodeWebSocket;
 }
 
-/** True when `openSocket` opens `url` with the library's own Node.js WebSocket client. */
-export function usesNodeWebSocket(url: string): boolean {
-  return !isTcpUrl(url) && nodeWebSocket !== null && isNodeRuntime();
+/**
+ * True when `openSocket` opens `url` with the library's own Node.js WebSocket client: a
+ * WebSocket URL, the client is loaded, and `enabled` (the `nodeWebSocket` option) is not false.
+ */
+export function usesNodeWebSocket(url: string, enabled = true): boolean {
+  return enabled && !isTcpUrl(url) && nodeWebSocket !== null && isNodeRuntime();
 }
 
 /**
@@ -124,7 +133,9 @@ export function openSocket(url: string, options: OpenSocketOptions = {}): WebSoc
     if (!tcpTransport) throw new Error('The raw TCP transport is not loaded');
     return new tcpTransport.SpeedTransportSocket(url, { binaryPayloads: 'discard', ...connectTimeout }) as WebSocket;
   }
-  if (usesNodeWebSocket(url)) return new nodeWebSocket!.NodeWebSocket(url, connectTimeout) as WebSocket;
+  if (usesNodeWebSocket(url, options.nodeWebSocket !== false)) {
+    return new nodeWebSocket!.NodeWebSocket(url, connectTimeout) as WebSocket;
+  }
   return new WebSocket(url);
 }
 
@@ -189,13 +200,15 @@ export interface ServerUrlSelection {
  * only allows secure WebSockets), then secure WebSocket (`WSSv1`). The first entry is the
  * primary URL and the rest are fallbacks for a first connection that cannot open, for
  * example on a network that only passes HTTPS. `tcp`, `ws`, and `wss` force one transport.
+ * Unless `options.nodeWebSocket` is false, it also loads the Node.js WebSocket client, which
+ * the run's WebSockets then use.
  */
 export async function selectServerUrl(
   server: SpeedTestServer,
-  transport: SpeedTestTransport = 'auto'
+  transport: SpeedTestTransport = 'auto',
+  options: { nodeWebSocket?: boolean } = {}
 ): Promise<ServerUrlSelection> {
-  // Every WebSocket of the run then uses the Node.js client, where there is one.
-  await loadNodeWebSocket();
+  if (options.nodeWebSocket !== false) await loadNodeWebSocket();
   const tcp: ResolvedServerUrl = { url: getServerTcpUrl(server), protocol: 'TCP' };
   const ws: ResolvedServerUrl = { url: getServerWebSocketUrl(server, false), protocol: 'WS' };
   const wss: ResolvedServerUrl = { url: getServerWebSocketUrl(server, true), protocol: 'WSS' };

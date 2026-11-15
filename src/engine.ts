@@ -227,7 +227,8 @@ export class SpeedTestEngine {
       } else if (!targetServer) {
         targetServer = await this.selectBestServer();
       }
-      const selection = await selectServerUrl(targetServer, this.config.transport);
+      const nodeWebSocket = this.config.nodeWebSocket !== false;
+      const selection = await selectServerUrl(targetServer, this.config.transport, { nodeWebSocket });
       let serverUrl = selection.primary.url;
       testProtocol = selection.primary.protocol;
       const fallbacks = [...selection.fallbacks];
@@ -285,6 +286,7 @@ export class SpeedTestEngine {
           latencyData = await firstConnection((url, connectTimeoutMs) =>
             stageRunner.runLatencyTest({
               serverUrl: url,
+              nodeWebSocket,
               pingCount: this.config.pingCount,
               timeoutMs: this.config.latencyTimeoutMs,
               connectTimeoutMs,
@@ -297,6 +299,7 @@ export class SpeedTestEngine {
           latencyData = await firstConnection((url, connectTimeoutMs) =>
             stageRunner.runLatencyTest({
               serverUrl: url,
+              nodeWebSocket,
               pingCount: 1,
               connectTimeoutMs,
               cancellationToken,
@@ -312,6 +315,7 @@ export class SpeedTestEngine {
           stages.push(await buildStage('downloadStart'));
           downloadEstimation = await stageRunner.runDownloadEstimationTest({
             serverUrl,
+            nodeWebSocket,
             latencyMs,
             jitterMs,
             timeoutMs: this.config.estimationTimeoutMs,
@@ -322,6 +326,7 @@ export class SpeedTestEngine {
           downloadConnectionCount = getDownloadConnectionCount(downloadEstimation.speedMbps);
           downloadResult = await stageRunner.runDownloadSpeedTest({
             serverUrl,
+            nodeWebSocket,
             messageSizeKb: downloadMessageSizeKb,
             connectionCount: downloadConnectionCount,
             durationMs: this.config.downloadDurationMs,
@@ -348,6 +353,7 @@ export class SpeedTestEngine {
           stages.push(await buildStage('uploadStart'));
           uploadEstimation = await stageRunner.runUploadEstimationTest({
             serverUrl,
+            nodeWebSocket,
             latencyMs,
             jitterMs,
             timeoutMs: this.config.estimationTimeoutMs,
@@ -358,6 +364,7 @@ export class SpeedTestEngine {
           uploadConnectionCount = getUploadConnectionCount(uploadEstimation.speedMbps);
           uploadResult = await stageRunner.runUploadSpeedTest({
             serverUrl,
+            nodeWebSocket,
             messageSizeKb: uploadMessageSizeKb,
             connectionCount: uploadConnectionCount,
             durationMs: this.config.uploadDurationMs,
@@ -688,7 +695,7 @@ function normalizeAndValidateApplicationInfo(
 function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): SpeedTestConfig {
   const config = { ...DEFAULT_CONFIG, ...overrides };
 
-  const rules: Array<[Exclude<keyof SpeedTestConfig, 'transport' | 'browserWorker'>, number, number]> = [
+  const rules: Array<[Exclude<keyof SpeedTestConfig, 'transport' | 'browserWorker' | 'nodeWebSocket'>, number, number]> = [
     ['pingCount', 5, 50],
     ['downloadDurationMs', 3000, 30000],
     ['uploadDurationMs', 3000, 30000],
@@ -705,6 +712,11 @@ function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): Speed
   config.browserWorker = config.browserWorker ?? true;
   if (typeof config.browserWorker !== 'boolean') {
     throw new Error('SpeedTestEngineOptions.config.browserWorker must be a boolean');
+  }
+
+  config.nodeWebSocket = config.nodeWebSocket ?? true;
+  if (typeof config.nodeWebSocket !== 'boolean') {
+    throw new Error('SpeedTestEngineOptions.config.nodeWebSocket must be a boolean');
   }
 
   for (const [field, min, max] of rules) {

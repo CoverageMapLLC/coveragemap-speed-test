@@ -463,7 +463,7 @@ When the stage ends, the download sockets stop requesting more messages but stay
 
 #### Threads
 
-A single JavaScript thread cannot receive or send TLS at 10 Gbps. When the estimate is 1 Gbps or more (the single socket estimate tops out at a few Gbps however fast the link is), Node.js spreads the sockets across worker threads: 6 when `config.throughputThreads` is `0` (its default, which picks the count automatically), two sockets each, and at most one per CPU core (the server runs elsewhere, and the calling thread only takes snapshots and loaded latency pings). Each worker runs the same lane code and publishes its byte count through a `SharedArrayBuffer`, so the main thread's snapshots stay real time. Workers open the same kind of socket as the calling thread: raw TCP and the [Node.js WebSocket client](#nodejs-websocket-client) load inside the worker; a global `WebSocket` is only used in a worker when it is the same implementation as the application's, so a polyfill keeps every socket on the calling thread. Below 1 Gbps or with `throughputThreads: 1` every socket stays on the calling thread.
+A single JavaScript thread cannot receive or send TLS at 10 Gbps. When the estimate is 1 Gbps or more (the single socket estimate tops out at a few Gbps however fast the link is), Node.js spreads the sockets across worker threads: 6 when `config.throughputThreads` is `0` (its default, which picks the count automatically), two sockets each, and at most one per CPU core (the server runs elsewhere, and the calling thread only takes snapshots and loaded latency pings). Each worker runs the same lane code and publishes its byte count through a `SharedArrayBuffer`, so the main thread's snapshots stay real time. Workers open the same kind of socket as the calling thread: raw TCP and the [Node.js WebSocket client](#nodejs-websocket-client) load inside the worker; a global `WebSocket` is only used in a worker when it is the same implementation as the application's, so a polyfill keeps every socket on the calling thread. Below 1 Gbps or with `throughputThreads: 1` every socket stays on the calling thread. In browsers every socket of a stage runs on one thread: the [browser worker](#browser-worker), or the page's main thread when it is off or cannot start.
 
 #### Node.js WebSocket client
 
@@ -472,7 +472,9 @@ In Node.js, `ws://` and `wss://` sockets come from the library's own client (`sr
 - Download messages above 64 KiB are counted, not read: the frame parser skips their payload, and the message arrives as a zero-filled `ArrayBuffer` of the right length.
 - Upload chunks are zeros, so a masked chunk is the masking key repeated. Each chunk size is masked once with a random key and that frame is sent again and again. RFC 6455 asks for a fresh key per frame so that page scripts cannot choose the bytes intermediaries see; the payload here is always zeros chosen by the library. Commands get a fresh key per frame.
 
-Bun and Deno keep their native `WebSocket`. If the client cannot load, the global `WebSocket` is used as before. In browsers every socket of a stage runs on one thread: the [browser worker](#browser-worker), or the page's main thread when it is off or cannot start.
+Bun and Deno keep their native `WebSocket`. If the client cannot load, the global `WebSocket` is used as before.
+
+Applications that need their own `WebSocket` in Node.js, for example one that goes through an HTTP proxy, adds headers, or uses custom TLS options, set `config.nodeWebSocket: false`. Every socket of the run, the loaded latency socket and worker thread sockets included, then comes from `globalThis.WebSocket` as before this client existed. Worker threads are only used when the workers' `WebSocket` is the same implementation, so a polyfill keeps every socket on the calling thread, and the built-in client's per-byte work applies again. Raw TCP is unaffected.
 
 #### Measurement Model
 
@@ -848,7 +850,7 @@ const engine = new SpeedTestEngine({
 
 The protocol runners use the WebSocket API and `globalThis.fetch` — no browser-specific APIs. In Node.js the sockets come from the library's [Node.js WebSocket client](#nodejs-websocket-client), or from `@coveragemap/speed-transport` when the run uses [raw TCP](#raw-tcp-transport). In Node.js environments:
 
-- No WebSocket implementation or polyfill is needed on any supported Node.js version, for raw TCP, WebSocket, and secure WebSocket servers alike (including CDN servers). A `globalThis.WebSocket` polyfill is only used if the library's client cannot load.
+- No WebSocket implementation or polyfill is needed on any supported Node.js version, for raw TCP, WebSocket, and secure WebSocket servers alike (including CDN servers). A `globalThis.WebSocket` polyfill is only used if the library's client cannot load, or with `config.nodeWebSocket: false`.
 - Multi-gigabit stages run their sockets on worker threads (see [Threads](#threads)).
 - `performance.now()` is available in Node.js via the `perf_hooks` module (globally available in Node 16+).
 - `localStorage` is not available in Node.js. The upload queue fallback (`saveToLocalQueue` / `flushUploadQueue`) will silently no-op if `localStorage` throws, which it will in a Node environment.

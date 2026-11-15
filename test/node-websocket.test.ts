@@ -270,6 +270,43 @@ describe('sockets with the Node.js WebSocket client', () => {
     }
   });
 
+  it('uses the global WebSocket for every socket of a stage when nodeWebSocket is false', async () => {
+    const url = await startSpeedTestServer();
+    const { WebSocket: WsWebSocket } = await import('ws');
+    const opened: string[] = [];
+    class CountingWebSocket extends WsWebSocket {
+      constructor(address: string) {
+        super(address);
+        opened.push(address);
+      }
+    }
+    const saved = (globalThis as { WebSocket?: unknown }).WebSocket;
+    (globalThis as { WebSocket?: unknown }).WebSocket = CountingWebSocket;
+    try {
+      expect(usesNodeWebSocket(url, false)).toBe(false);
+      const socket = openSocket(url, { nodeWebSocket: false });
+      expect(socket).toBeInstanceOf(CountingWebSocket);
+      socket.close();
+
+      const cancellationToken = new CancellationToken();
+      await runLatencyTest({ serverUrl: url, pingCount: 5, cancellationToken, nodeWebSocket: false });
+      await runUploadSpeedTest({
+        serverUrl: url,
+        messageSizeKb: 64,
+        connectionCount: 2,
+        durationMs: 300,
+        latencyMs: 0,
+        jitterMs: 0,
+        cancellationToken,
+        nodeWebSocket: false,
+      });
+      // The latency socket, both upload sockets, and the loaded latency socket.
+      expect(opened).toHaveLength(5);
+    } finally {
+      (globalThis as { WebSocket?: unknown }).WebSocket = saved;
+    }
+  });
+
   it('sends zero-filled chunks through sendZeroFilled where a socket has it, and send() otherwise', () => {
     const chunk = new Uint8Array(8);
     const fast = { sendZeroFilled: (length: number) => sent.push(`zeros ${length}`), send: () => sent.push('send') };

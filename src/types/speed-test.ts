@@ -77,6 +77,15 @@ export interface SpeedTestConfig {
    * page's main thread. `false` always uses the main thread. Ignored outside browsers.
    */
   browserWorker?: boolean;
+  /**
+   * In Node.js, open `ws://` and `wss://` sockets with the library's own WebSocket client
+   * (`true`, the default). It counts download data without copying it and does not mask
+   * upload data byte by byte, which a 10 Gbps test needs. `false` uses `globalThis.WebSocket`
+   * instead, for applications that rely on their own implementation (one that goes through a
+   * proxy, for example); multi-gigabit stages then run on worker threads only when the workers'
+   * `WebSocket` matches. Raw TCP is unaffected. Ignored outside Node.js.
+   */
+  nodeWebSocket?: boolean;
 }
 
 export type SpeedTestTransport = 'auto' | 'tcp' | 'ws' | 'wss';
@@ -97,6 +106,7 @@ export const DEFAULT_CONFIG: SpeedTestConfig = {
   throughputThreads: 0,
   transport: 'auto',
   browserWorker: true,
+  nodeWebSocket: true,
 };
 
 export interface SpeedTestCallbacks {
