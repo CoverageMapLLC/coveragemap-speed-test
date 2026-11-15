@@ -58,6 +58,7 @@ import { roundTo3Decimals } from './utils/speed.js';
 import type { ApiBaseUrlOverrides } from './api/config.js';
 import { SpeedTestApiClient } from './api/speed-api.js';
 import { CoverageMapApiClient } from './api/coveragemap-api.js';
+import { assertUploadBaseUrl } from './api/config.js';
 
 const DEFAULT_RESULTS_QUEUE_KEY = 'coveragemap-test-results-queue';
 
@@ -84,8 +85,13 @@ export class SpeedTestEngine {
   private tests: Required<SpeedTestSelection>;
   private callbacks: SpeedTestCallbacks;
   private speedApi: SpeedTestApiClient;
-  private coverageMapApi: CoverageMapApiClient;
-  private queueStorageKey: string;
+  /*
+   * Result uploads use ES private members (#), not TypeScript `private`: a subclass or a caller
+   * cannot replace them, so every completed test is uploaded to CoverageMap (see the README's
+   * Data Upload and Fair Use Policy).
+   */
+  readonly #coverageMapApi: CoverageMapApiClient;
+  readonly #queueStorageKey: string;
   private cancellationToken: CancellationToken | null = null;
   private _stage: SpeedTestStage = 'idle';
   private _isRunning = false;
@@ -98,9 +104,10 @@ export class SpeedTestEngine {
     this.config = normalizeAndValidateConfig(options.config);
     this.tests = normalizeAndValidateTestSelection(options.tests);
     this.callbacks = options.callbacks ?? {};
+    assertUploadBaseUrl(options.api);
     this.speedApi = new SpeedTestApiClient(options.api);
-    this.coverageMapApi = new CoverageMapApiClient(options.api);
-    this.queueStorageKey = DEFAULT_RESULTS_QUEUE_KEY;
+    this.#coverageMapApi = new CoverageMapApiClient(options.api);
+    this.#queueStorageKey = DEFAULT_RESULTS_QUEUE_KEY;
     this.sessionId = generateUUID();
     this.locationProvider = null;
     this.networkProvider = null;
@@ -174,7 +181,7 @@ export class SpeedTestEngine {
   }
 
   async retryQueuedUploads(): Promise<void> {
-    await this.flushUploadQueue();
+    await this.#flushUploadQueue();
   }
 
   async run(server?: SpeedTestServer | string): Promise<NetworkTestResultTestResults> {
@@ -184,7 +191,7 @@ export class SpeedTestEngine {
 
     this._isRunning = true;
     this.cancellationToken = new CancellationToken();
-    this.flushUploadQueue();
+    void this.#flushUploadQueue();
     const testId = generateUUID();
     const startTime = new Date();
     let targetServer: SpeedTestServer | null = typeof server === 'object' ? server : null;
@@ -406,12 +413,14 @@ export class SpeedTestEngine {
         failedStage,
       });
 
+      // Upload before any callback runs, and a copy: a callback that throws, cancels, or changes
+      // the result it is handed doesn't change what is uploaded
+      if (!wasCancelled && !this.cancellationToken?.isCancelled) {
+        void this.#uploadResults(structuredClone(testResults));
+      }
+
       this.setStage('complete');
       this.callbacks.onComplete?.(latencyData, downloadResult, uploadResult, testResults);
-
-      if (!wasCancelled && !this.cancellationToken?.isCancelled) {
-        this.uploadResults(testResults);
-      }
       return testResults;
     } finally {
       runner?.close();
@@ -595,39 +604,39 @@ export class SpeedTestEngine {
     };
   }
 
-  private async uploadBatch(results: NetworkTestResultTestResults[]): Promise<void> {
-    await this.coverageMapApi.uploadSpeedTestResults(results);
+  async #uploadBatch(results: NetworkTestResultTestResults[]): Promise<void> {
+    await this.#coverageMapApi.uploadSpeedTestResults(results);
   }
 
-  private async uploadResults(results: NetworkTestResultTestResults): Promise<void> {
+  async #uploadResults(results: NetworkTestResultTestResults): Promise<void> {
     try {
-      await this.uploadBatch([results]);
+      await this.#uploadBatch([results]);
     } catch {
-      this.saveToLocalQueue(results);
+      this.#saveToLocalQueue(results);
     }
   }
 
-  private saveToLocalQueue(results: NetworkTestResultTestResults): void {
+  #saveToLocalQueue(results: NetworkTestResultTestResults): void {
     try {
-      const existing = localStorage.getItem(this.queueStorageKey);
+      const existing = localStorage.getItem(this.#queueStorageKey);
       const queue: NetworkTestResultTestResults[] = existing ? JSON.parse(existing) : [];
       queue.push(results);
-      localStorage.setItem(this.queueStorageKey, JSON.stringify(queue));
+      localStorage.setItem(this.#queueStorageKey, JSON.stringify(queue));
     } catch {
       // localStorage may be unavailable
     }
   }
 
-  private async flushUploadQueue(): Promise<void> {
+  async #flushUploadQueue(): Promise<void> {
     try {
-      const existing = localStorage.getItem(this.queueStorageKey);
+      const existing = localStorage.getItem(this.#queueStorageKey);
       if (!existing) return;
 
       const queue: NetworkTestResultTestResults[] = JSON.parse(existing);
       if (queue.length === 0) return;
 
-      await this.uploadBatch(queue);
-      localStorage.removeItem(this.queueStorageKey);
+      await this.#uploadBatch(queue);
+      localStorage.removeItem(this.#queueStorageKey);
     } catch {
       // Will retry on the next run
     }

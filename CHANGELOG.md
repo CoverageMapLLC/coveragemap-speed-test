@@ -10,6 +10,7 @@
 
 ### Breaking Changes
 
+- **Result uploads can't be turned off**: Completed results are always uploaded, even from subclasses or when `onComplete` throws. `api.coverageMapApiBaseUrl` must now be an `https://` URL on `coveragemap.com` or a subdomain (or loopback for a fully local setup).
 - `SpeedTestData.speedMbps`, and with it `downloadSpeed`, `uploadSpeed`, `downloadList`, and `uploadList` in the result, now leave out the ramp-up and read higher on most links.
 
 ## 0.5.0

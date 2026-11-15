@@ -292,6 +292,112 @@ describe('engine regression', () => {
     expect(engine.isRunning).toBe(false);
   });
 
+  describe('result uploads cannot be turned off', () => {
+    const server = {
+      id: 'srv-1',
+      domain: 'speed.example.com',
+      port: 443,
+      provider: null,
+      city: null,
+      region: null,
+      country: 'US',
+      location: 'US',
+      latitude: null,
+      longitude: null,
+      distance: null,
+      isCDN: null,
+    };
+
+    it('uploads from a subclass that overrides the upload methods', async () => {
+      const { SpeedTestEngine } = await import('../src/engine.js');
+      class NoUploadEngine extends SpeedTestEngine {
+        async uploadResults() {}
+        async uploadBatch() {}
+        async flushUploadQueue() {}
+        saveToLocalQueue() {}
+      }
+
+      await new NoUploadEngine({ application: applicationMetadata }).run(server);
+
+      expect(mocks.uploadResultsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('uploads when the upload client property is replaced', async () => {
+      const { SpeedTestEngine } = await import('../src/engine.js');
+      const engine = new SpeedTestEngine({ application: applicationMetadata });
+      const noop = vi.fn();
+      Object.assign(engine, { coverageMapApi: { uploadSpeedTestResults: noop } });
+
+      await engine.run(server);
+
+      expect(noop).not.toHaveBeenCalled();
+      expect(mocks.uploadResultsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('uploads the result as measured when onComplete throws, cancels, or edits it', async () => {
+      const { SpeedTestEngine } = await import('../src/engine.js');
+      const engine: InstanceType<typeof SpeedTestEngine> = new SpeedTestEngine({
+        application: applicationMetadata,
+        callbacks: {
+          onComplete: (_latency, _download, _upload, results) => {
+            results.results.measurements.downloadSpeed = 0;
+            engine.cancel();
+            throw new Error('callback failed');
+          },
+        },
+      });
+
+      await expect(engine.run(server)).rejects.toThrow('callback failed');
+
+      expect(mocks.uploadResultsMock).toHaveBeenCalledTimes(1);
+      const [uploaded] = mocks.uploadResultsMock.mock.calls[0][0] as NetworkTestResultTestResults[];
+      expect(uploaded.results.measurements.downloadSpeed).toBe(120);
+    });
+
+    it('does not upload a test cancelled while it runs', async () => {
+      const { SpeedTestEngine } = await import('../src/engine.js');
+      mocks.downloadSpeedMock.mockImplementationOnce(async () => {
+        engine.cancel();
+        throw new CancellationError();
+      });
+      const engine = new SpeedTestEngine({ application: applicationMetadata });
+
+      await engine.run(server);
+
+      expect(mocks.uploadResultsMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another host', { coverageMapApiBaseUrl: 'https://results.example.com' }],
+      ['a look-alike host', { coverageMapApiBaseUrl: 'https://coveragemap.com.example.com' }],
+      ['plain HTTP', { coverageMapApiBaseUrl: 'http://map.coveragemap.com' }],
+      ['loopback with the CoverageMap speed test API', { coverageMapApiBaseUrl: 'http://127.0.0.1:1' }],
+      ['loopback with a remote speed test API', { coverageMapApiBaseUrl: 'http://localhost:1', speedApiBaseUrl: 'https://speed.example.com' }],
+      ['not a URL', { coverageMapApiBaseUrl: 'nowhere' }],
+    ])('refuses an upload URL on %s', async (_label, api) => {
+      const { SpeedTestEngine } = await import('../src/engine.js');
+      expect(() => new SpeedTestEngine({ application: applicationMetadata, api })).toThrow(/coverageMapApiBaseUrl must be/);
+    });
+
+    it.each([
+      ['production', { coverageMapApiBaseUrl: 'https://map.coveragemap.com/' }],
+      ['a CoverageMap subdomain', { coverageMapApiBaseUrl: 'https://map.staging.coveragemap.com' }],
+      ['a fully local setup', { coverageMapApiBaseUrl: 'http://localhost:8787', speedApiBaseUrl: 'http://127.0.0.1:8788' }],
+      ['no override', {}],
+    ])('accepts an upload URL on %s', async (_label, api) => {
+      const { SpeedTestEngine } = await import('../src/engine.js');
+      expect(() => new SpeedTestEngine({ application: applicationMetadata, api })).not.toThrow();
+    });
+  });
+
+  it('freezes the upload client so its upload cannot be patched for every engine', async () => {
+    const { CoverageMapApiClient } = await vi.importActual<typeof import('../src/api/coveragemap-api.js')>('../src/api/coveragemap-api.js');
+    expect(Object.isFrozen(CoverageMapApiClient.prototype)).toBe(true);
+    expect(() => {
+      (CoverageMapApiClient.prototype as unknown as Record<string, unknown>).uploadSpeedTestResults = async () => {};
+    }).toThrow(TypeError);
+  });
+
   it('queues results when upload fails and retries queued uploads', async () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
 
@@ -525,20 +631,20 @@ describe('engine regression', () => {
       application: applicationMetadata,
       api: {
         speedApiBaseUrl: 'https://speed.internal.example',
-        coverageMapApiBaseUrl: 'https://map.internal.example',
+        coverageMapApiBaseUrl: 'https://map.staging.coveragemap.com',
       },
     });
 
     expect(mocks.speedApiCtorArgs[0]).toEqual([
       {
         speedApiBaseUrl: 'https://speed.internal.example',
-        coverageMapApiBaseUrl: 'https://map.internal.example',
+        coverageMapApiBaseUrl: 'https://map.staging.coveragemap.com',
       },
     ]);
     expect(mocks.coverageMapApiCtorArgs[0]).toEqual([
       {
         speedApiBaseUrl: 'https://speed.internal.example',
-        coverageMapApiBaseUrl: 'https://map.internal.example',
+        coverageMapApiBaseUrl: 'https://map.staging.coveragemap.com',
       },
     ]);
   });
