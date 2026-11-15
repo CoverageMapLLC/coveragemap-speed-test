@@ -361,6 +361,7 @@ interface SpeedTestConfig {
   throughputThreads?: number;
   transport?: 'auto' | 'tcp' | 'ws' | 'wss';
   browserWorker?: boolean;
+  nodeWebSocket?: boolean;
 }
 ```
 
@@ -372,9 +373,10 @@ interface SpeedTestConfig {
 | `snapshotIntervalMs` | `number` | `100` | 50 – 5000 | Interval between progress snapshots emitted during sustained throughput stages. Lower values increase callback frequency. |
 | `latencyTimeoutMs` | `number` | `10000` | 3000 – 30000 | Maximum time allowed for the latency stage to collect sufficient probe responses. The stage fails if this window is exceeded. |
 | `estimationTimeoutMs` | `number` | `15000` | 3000 – 30000 | Maximum time allowed for download and upload estimation phases. Prevents the run from hanging during pre-throughput sizing. |
-| `throughputThreads` | `number` | `0` | 0 – 64 | Threads the download and upload stages spread their sockets across when the estimate is 1 Gbps or more. `0` picks automatically (6), `1` keeps every socket on the calling thread. Extra threads are Node.js worker threads, used only with Node's built-in `WebSocket` (or raw TCP) and never more than half the CPU cores; browsers ignore it. |
+| `throughputThreads` | `number` | `0` | 0 – 64 | Threads the download and upload stages spread their sockets across when the estimate is 1 Gbps or more. `0` picks automatically (6), `1` keeps every socket on the calling thread. Extra threads are Node.js worker threads, at most one per CPU core; browsers ignore it. |
 | `transport` | `string` | `'auto'` | `auto`, `tcp`, `ws`, `wss` | How sockets connect. The speed test carries no private data, so `auto` uses the fastest transport the server's `protocols` list and only encrypts where it must: [raw TCP](./protocol.md#raw-tcp-transport) in Node.js, then plain WebSocket, then secure WebSocket, which browsers need on HTTPS pages. If the first connection cannot open within 3 seconds, the run moves on to the next one. Raw TCP needs far less client CPU at multi-gigabit speeds. `tcp`, `ws`, and `wss` always use that one transport; `tcp` fails in browsers and `ws` fails on HTTPS pages. |
 | `browserWorker` | `boolean` | `true` | `true`, `false` | In browsers, runs every stage's sockets and timing in a dedicated Web Worker, so the page's own work (rendering progress, for example) cannot lower the measured speeds or inflate latency. The worker is embedded in the library and started from a `blob:` URL, so no bundler setup is needed. Where it cannot start (a Content Security Policy without `worker-src blob:`, no `Worker` support) or the page installed its own `WebSocket`, the test runs on the main thread. `false` always uses the main thread. Ignored outside browsers. See [Browser Worker](./protocol.md#browser-worker). |
+| `nodeWebSocket` | `boolean` | `true` | `true`, `false` | In Node.js, opens `ws://` and `wss://` sockets with the library's own WebSocket client, which counts download data without copying it and does not mask upload data byte by byte. `false` uses `globalThis.WebSocket` for every socket instead, for applications that need their own implementation (an HTTP proxy, extra headers, custom TLS options); a polyfill then keeps every socket on one thread. Raw TCP is unaffected. Ignored outside Node.js. See [Node.js WebSocket client](./protocol.md#nodejs-websocket-client). |
 
 ---
 
@@ -444,7 +446,7 @@ interface SpeedTestCallbacks {
 | `onDownloadResult` | `data: SpeedTestData` | Fired once when the sustained download stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
 | `onUploadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained upload stage. |
 | `onUploadResult` | `data: SpeedTestData` | Fired once when the sustained upload stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
-| `onComplete` | `latencyData, downloadData, uploadData, result` | Fired after the run assembles final measurements. The first three arguments are the aggregated stage results (`null` if that stage was not run). `result` is the complete `NetworkTestResultTestResults` payload — the same object returned by `run()` and uploaded to CoverageMap. |
+| `onComplete` | `latencyData, downloadData, uploadData, result` | Fired after the run assembles final measurements. The first three arguments are the aggregated stage results (`null` if that stage was not run). `result` is the complete `NetworkTestResultTestResults` payload — the same object returned by `run()`. A copy is uploaded to CoverageMap before this callback runs, so changing `result` doesn't change the upload. |
 | `onError` | `error: Error, stage: SpeedTestStage` | Fired for non-cancellation stage failures. Cancellation does not emit this. |
 
 ---
@@ -907,7 +909,7 @@ interface SpeedSnapshot {
 | Field | Type | Description |
 |-------|------|-------------|
 | `timeOffsetMs` | `number` | Time elapsed since the stage started, in milliseconds. |
-| `speedMbps` | `number` | Instantaneous throughput at this snapshot. |
+| `speedMbps` | `number` | Throughput so far, by the same rule as the stage's final `speedMbps`: over the whole stage until the measurement start (250 ms after the first bytes), from the measurement start afterwards. |
 | `bytes` | `number` | Cumulative bytes transferred at this snapshot. |
 
 ---
@@ -929,12 +931,12 @@ interface SpeedTestData {
 | Field | Type | Description |
 |-------|------|-------------|
 | `durationMs` | `number` | Total stage duration in milliseconds. |
-| `speedMbps` | `number` | Final throughput result in Mbps. |
+| `speedMbps` | `number` | Final throughput result in Mbps, measured from 250 ms after the stage's first counted bytes (the first `ACK`, for upload) to its end, so the slow start of the connections does not lower it. Everything after that point counts, so a ramp-up that lasts longer still lowers it. A stage that ended before that point is measured as a whole: `bytes / (max(durationMs - (latencyMs + jitterMs), 1) * 125)`. This is the value reported as `downloadSpeed` / `uploadSpeed`. See [Measurement Model](./protocol.md#measurement-model). |
 | `bytes` | `number` | Total bytes transferred during the stage. |
 | `snapshots` | `SpeedSnapshot[]` | All progress snapshots collected during the stage. |
-| `loadedLatency` | `LatencyTestData \| null` | Latency measurements collected concurrently while throughput was saturated. `null` if no pings were completed during the stage. |
+| `loadedLatency` | `LatencyTestData \| null` | Latency measurements collected concurrently while throughput was saturated. `null` if no pings were completed during the stage, including a stage that ended less than 1 s after its first bytes. |
 
-`loadedLatency` is measured by sending periodic PING/PONG probes over a dedicated WebSocket connection that runs in parallel throughout the entire download or upload stage. Because the link is under load during these probes, the values reflect real-world latency under congestion — sometimes called "bufferbloat" or "under-load latency" — rather than the idle RTT captured by the pre-test latency stage. Compare it against the pre-test [`LatencyTestData`](#latencytestdata) from `onLatencyResult` to quantify how much latency increases when the connection is saturated.
+`loadedLatency` is measured by sending PING/PONG probes, 500 ms apart, over a dedicated connection that opens when the download or upload stage starts. The first probe waits until the link carries the stage's traffic: 1 s after the stage's first counted bytes (the first `ACK`, for upload), independent of the 250 ms ramp-up exclusion of the speed. Because the link is under load during these probes, the values reflect real-world latency under congestion — sometimes called "bufferbloat" or "under-load latency" — rather than the idle RTT captured by the pre-test latency stage. Compare it against the pre-test [`LatencyTestData`](#latencytestdata) from `onLatencyResult` to quantify how much latency increases when the connection is saturated.
 
 ---
 
@@ -1407,6 +1409,8 @@ function getCoverageMapApiBaseUrl(overrides?: ApiBaseUrlOverrides): string;
 ```
 
 `SpeedTestEngineOptions.api`, `SpeedTestApiClient`, and `CoverageMapApiClient` all accept the same optional override shape. Helpers return the resolved HTTPS base URL (trailing slashes stripped), using CoverageMap production hosts when a field is omitted.
+
+`SpeedTestEngine` requires `coverageMapApiBaseUrl` to be an `https://` URL on `coveragemap.com` or a subdomain (or a loopback URL when `speedApiBaseUrl` is loopback too), and throws otherwise.
 
 `CoverageMapApiClient` constructor: `new CoverageMapApiClient(overrides?: ApiBaseUrlOverrides)`.
 

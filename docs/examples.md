@@ -583,14 +583,7 @@ const result: NetworkTestResultTestResults = await engine.run();
 
 ### Node.js WebSocket bootstrap
 
-In Node.js the engine runs over raw TCP when the server offers it (`config.transport: 'auto'`, the default) and needs no WebSocket for that. Servers without raw TCP, including CDN servers, use `globalThis.WebSocket`. Node 22+ ships it natively; for older runtimes, polyfill it once at app startup before importing the engine.
-
-```ts
-import { WebSocket } from 'ws';
-
-// must run before any SpeedTestEngine usage
-globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket;
-```
+In Node.js the engine runs over raw TCP when the server offers it (`config.transport: 'auto'`, the default). Servers without raw TCP, including CDN servers, use the library's own WebSocket client. Neither needs `globalThis.WebSocket` or a polyfill on any supported Node.js version.
 
 ---
 

@@ -5,17 +5,19 @@ import {
   type ThroughputLaneCallbacks,
   type ThroughputLaneOptions,
 } from './throughput-lanes.js';
-import { isNodeRuntime, isTcpUrl, loadTcpTransport } from './sockets.js';
+import { isNodeRuntime, isTcpUrl, loadNodeWebSocket, loadTcpTransport, usesNodeWebSocket } from './sockets.js';
 
 /**
  * Runs throughput lanes on Node.js worker threads so socket I/O, TLS, and WebSocket framing
  * for the throughput stages spread across CPU cores. A single JavaScript thread tops out at a
  * few Gbps, which is below the multi-gigabit links the library measures.
  *
- * Workers use their own global `WebSocket`. They are only used when it is the same
+ * Workers open the same kind of socket as the calling thread. Raw TCP lanes (`tcp://` URLs)
+ * load the transport inside the worker, and so do WebSocket lanes when the calling thread uses
+ * the library's Node.js WebSocket client (`usesNodeWebSocket`); neither needs a global
+ * `WebSocket`. Otherwise workers use their own global `WebSocket`, and only when it is the same
  * implementation as the calling thread's, so a polyfill or custom subclass installed by the
- * application always keeps every socket on the calling thread. Raw TCP lanes (`tcp://` URLs)
- * load the transport inside the worker and need no global `WebSocket`.
+ * application keeps every socket on the calling thread.
  */
 
 export interface WorkerLaneData extends ThroughputLaneOptions {
@@ -25,15 +27,19 @@ export interface WorkerLaneData extends ThroughputLaneOptions {
   slot: number;
   /** Source text of the calling thread's `WebSocket`, compared inside the worker. Unused for raw TCP. */
   webSocketSource: string | null;
+  /** The calling thread opens `ws://` and `wss://` with the Node.js WebSocket client, so the worker loads it too. */
+  nodeWebSocket?: boolean;
 }
 
 export type WorkerToHostMessage =
   | { type: 'ready' }
   | { type: 'unsupported' }
   | { type: 'open' }
+  /** The lane counted its first bytes, sent once: the runner starts the ramp-up exclusion. */
+  | { type: 'bytes' }
   | { type: 'error'; message: string };
 
-export type HostToWorkerMessage = { type: 'start' } | { type: 'close' };
+export type HostToWorkerMessage = { type: 'start' } | { type: 'stopRequests' } | { type: 'close' };
 
 export interface LanePort {
   postMessage(message: WorkerToHostMessage): void;
@@ -55,6 +61,11 @@ export function getWebSocketSource(): string | null {
   }
 }
 
+/** Worker threads for a stage that asks for `requested`: at most one per core. */
+export function getWorkerThreadCount(requested: number, cores: number): number {
+  return Math.min(requested, Math.max(1, cores));
+}
+
 /** Splits `connectionCount` sockets across `threads` lanes as evenly as possible. */
 export function splitConnections(connectionCount: number, threads: number): number[] {
   const laneCount = Math.max(1, Math.min(threads, connectionCount));
@@ -70,19 +81,28 @@ export function splitConnections(connectionCount: number, threads: number): numb
 export async function hostWorkerLane(port: LanePort, data: WorkerLaneData): Promise<void> {
   const supported = isTcpUrl(data.serverUrl)
     ? (await loadTcpTransport()) !== null
-    : getWebSocketSource() === data.webSocketSource;
+    : data.nodeWebSocket
+      ? (await loadNodeWebSocket()) !== null
+      : getWebSocketSource() === data.webSocketSource;
   if (!supported) {
     port.postMessage({ type: 'unsupported' });
     return;
   }
 
   const counters = new BigInt64Array(data.counters);
+  let reportedBytes = false;
   let lane: ThroughputLane;
   try {
     lane = openThroughputLane(data.direction, data, {
       onOpen: () => port.postMessage({ type: 'open' }),
       onError: (error) => port.postMessage({ type: 'error', message: error.message }),
-      onBytes: (bytes) => Atomics.store(counters, data.slot, BigInt(bytes)),
+      onBytes: (bytes) => {
+        Atomics.store(counters, data.slot, BigInt(bytes));
+        if (!reportedBytes) {
+          reportedBytes = true;
+          port.postMessage({ type: 'bytes' });
+        }
+      },
     });
   } catch (error) {
     port.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });
@@ -91,6 +111,7 @@ export async function hostWorkerLane(port: LanePort, data: WorkerLaneData): Prom
 
   port.on('message', (message) => {
     if (message.type === 'start') lane.start();
+    else if (message.type === 'stopRequests') lane.stopRequests();
     else if (message.type === 'close') lane.close();
   });
   port.postMessage({ type: 'ready' });
@@ -125,10 +146,13 @@ async function loadWorkerSupport(): Promise<{ Worker: NodeWorkerConstructor; cor
 
 /**
  * Opens lanes on worker threads, splitting `connectionCount` sockets across up to `threads`
- * workers. Uses at most half of the available cores. Resolves null when worker threads are
- * unavailable or would use a different socket implementation, so the caller can fall back
- * to a lane on the calling thread. Rejects when a socket fails to connect, like a lane on
- * the calling thread does: retrying on one thread would hide the failure.
+ * workers. Uses at most one worker per available core: the server is on another machine, and
+ * the calling thread only takes snapshots and loaded latency pings. On a two core client,
+ * capping at half the cores left every socket on one thread, which holds secure WebSocket
+ * below 10 Gbps. Resolves null when worker threads are unavailable or would use a
+ * different socket implementation, so the caller can fall back to a lane on the calling
+ * thread. Rejects when a socket fails to connect, like a lane on the calling thread does:
+ * retrying on one thread would hide the failure.
  */
 export async function openWorkerLanes(
   direction: ThroughputDirection,
@@ -136,11 +160,12 @@ export async function openWorkerLanes(
   callbacks: ThroughputLaneCallbacks
 ): Promise<ThroughputLane[] | null> {
   const webSocketSource = getWebSocketSource();
-  if (!webSocketSource && !isTcpUrl(options.serverUrl)) return null;
+  const nodeWebSocket = usesNodeWebSocket(options.serverUrl, options.nodeWebSocket !== false);
+  if (!webSocketSource && !nodeWebSocket && !isTcpUrl(options.serverUrl)) return null;
   const support = await loadWorkerSupport();
   if (!support) return null;
 
-  const threads = Math.min(options.threads, Math.max(1, Math.floor(support.cores / 2)));
+  const threads = getWorkerThreadCount(options.threads, support.cores);
   const shares = splitConnections(options.connectionCount, threads);
   if (shares.length < 2) return null;
 
@@ -180,6 +205,7 @@ export async function openWorkerLanes(
             counters,
             slot,
             webSocketSource,
+            nodeWebSocket,
           },
         });
       } catch {
@@ -207,6 +233,10 @@ export async function openWorkerLanes(
             if (state === 'resolved') callbacks.onOpen();
             else pendingOpens++;
             break;
+          case 'bytes':
+            // Lanes only count bytes after they start, which is after they were handed over.
+            if (state === 'resolved') callbacks.onBytes?.(Number(Atomics.load(counterView, slot)));
+            break;
           case 'error':
             // A socket failed to connect. That fails the stage whether or not every worker
             // is ready yet.
@@ -232,6 +262,9 @@ function createWorkerLane(worker: NodeWorker, counters: BigInt64Array, slot: num
   return {
     start() {
       worker.postMessage({ type: 'start' });
+    },
+    stopRequests() {
+      if (!closed) worker.postMessage({ type: 'stopRequests' });
     },
     close() {
       if (closed) return;

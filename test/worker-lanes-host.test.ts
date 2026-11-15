@@ -149,6 +149,11 @@ describe('openWorkerLanes', () => {
       // Each lane's two sockets received one 2 KiB frame, read through the shared counters.
       expect(lanes!.map((lane) => lane.bytes)).toEqual([4096, 4096]);
 
+      // The stage ended: the workers stop requesting, but their sockets stay open until close.
+      for (const lane of lanes!) lane.stopRequests();
+      await vi.advanceTimersByTimeAsync(5);
+      expect(LaneSocketMock.instances.every((socket) => socket.readyState === 1)).toBe(true);
+
       for (const lane of lanes!) lane.close();
       await vi.advanceTimersByTimeAsync(5);
       expect(LaneSocketMock.instances.every((socket) => socket.readyState === 3)).toBe(true);
@@ -196,6 +201,42 @@ describe('openWorkerLanes', () => {
     // Six sockets from the first worker plus the loaded latency socket; no second set of
     // twelve on the calling thread.
     expect(LaneSocketMock.instances.length).toBeLessThanOrEqual(7);
+  });
+
+  it('reports the first bytes of each lane once through onBytes', async () => {
+    const events = callbacks();
+    const reported: number[] = [];
+    const lanes = await openWorkerLanes(
+      'download',
+      { serverUrl: SERVER_URL, connectionCount: 4, messageSizeKb: 2, threads: 2 },
+      { ...events, onBytes: (bytes) => reported.push(bytes) }
+    );
+    expect(reported).toEqual([]);
+    for (const lane of lanes!) lane.start();
+    await expect.poll(() => reported.length).toBe(2);
+    expect(reported.every((bytes) => bytes >= 2048)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(reported).toHaveLength(2);
+    for (const lane of lanes!) lane.close();
+  });
+
+  it('starts the ramp-up exclusion and loaded latency from bytes counted on worker threads', async () => {
+    // Every byte arrives at once at the start: nothing is counted after the measurement start
+    // 250 ms later, and the loaded latency pings start 1 s after the first bytes.
+    const result = await runDownloadSpeedTest({
+      serverUrl: SERVER_URL,
+      messageSizeKb: 2,
+      connectionCount: 4,
+      durationMs: 1300,
+      latencyMs: 1,
+      jitterMs: 1,
+      threads: 2,
+      cancellationToken: new CancellationToken(),
+    });
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(result.bytes).toBe(4 * 2048);
+    expect(result.speedMbps).toBe(0);
+    expect(result.loadedLatency).not.toBeNull();
   });
 
   it('reports a socket failure after the lanes were handed over through onError', async () => {

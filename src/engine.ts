@@ -58,6 +58,7 @@ import { roundTo3Decimals } from './utils/speed.js';
 import type { ApiBaseUrlOverrides } from './api/config.js';
 import { SpeedTestApiClient } from './api/speed-api.js';
 import { CoverageMapApiClient } from './api/coveragemap-api.js';
+import { assertUploadBaseUrl } from './api/config.js';
 
 const DEFAULT_RESULTS_QUEUE_KEY = 'coveragemap-test-results-queue';
 
@@ -84,8 +85,13 @@ export class SpeedTestEngine {
   private tests: Required<SpeedTestSelection>;
   private callbacks: SpeedTestCallbacks;
   private speedApi: SpeedTestApiClient;
-  private coverageMapApi: CoverageMapApiClient;
-  private queueStorageKey: string;
+  /*
+   * Result uploads use ES private members (#), not TypeScript `private`: a subclass or a caller
+   * cannot replace them, so every completed test is uploaded to CoverageMap (see the README's
+   * Data Upload and Fair Use Policy).
+   */
+  readonly #coverageMapApi: CoverageMapApiClient;
+  readonly #queueStorageKey: string;
   private cancellationToken: CancellationToken | null = null;
   private _stage: SpeedTestStage = 'idle';
   private _isRunning = false;
@@ -98,9 +104,10 @@ export class SpeedTestEngine {
     this.config = normalizeAndValidateConfig(options.config);
     this.tests = normalizeAndValidateTestSelection(options.tests);
     this.callbacks = options.callbacks ?? {};
+    assertUploadBaseUrl(options.api);
     this.speedApi = new SpeedTestApiClient(options.api);
-    this.coverageMapApi = new CoverageMapApiClient(options.api);
-    this.queueStorageKey = DEFAULT_RESULTS_QUEUE_KEY;
+    this.#coverageMapApi = new CoverageMapApiClient(options.api);
+    this.#queueStorageKey = DEFAULT_RESULTS_QUEUE_KEY;
     this.sessionId = generateUUID();
     this.locationProvider = null;
     this.networkProvider = null;
@@ -174,7 +181,7 @@ export class SpeedTestEngine {
   }
 
   async retryQueuedUploads(): Promise<void> {
-    await this.flushUploadQueue();
+    await this.#flushUploadQueue();
   }
 
   async run(server?: SpeedTestServer | string): Promise<NetworkTestResultTestResults> {
@@ -184,7 +191,7 @@ export class SpeedTestEngine {
 
     this._isRunning = true;
     this.cancellationToken = new CancellationToken();
-    this.flushUploadQueue();
+    void this.#flushUploadQueue();
     const testId = generateUUID();
     const startTime = new Date();
     let targetServer: SpeedTestServer | null = typeof server === 'object' ? server : null;
@@ -220,7 +227,8 @@ export class SpeedTestEngine {
       } else if (!targetServer) {
         targetServer = await this.selectBestServer();
       }
-      const selection = await selectServerUrl(targetServer, this.config.transport);
+      const nodeWebSocket = this.config.nodeWebSocket !== false;
+      const selection = await selectServerUrl(targetServer, this.config.transport, { nodeWebSocket });
       let serverUrl = selection.primary.url;
       testProtocol = selection.primary.protocol;
       const fallbacks = [...selection.fallbacks];
@@ -278,6 +286,7 @@ export class SpeedTestEngine {
           latencyData = await firstConnection((url, connectTimeoutMs) =>
             stageRunner.runLatencyTest({
               serverUrl: url,
+              nodeWebSocket,
               pingCount: this.config.pingCount,
               timeoutMs: this.config.latencyTimeoutMs,
               connectTimeoutMs,
@@ -290,6 +299,7 @@ export class SpeedTestEngine {
           latencyData = await firstConnection((url, connectTimeoutMs) =>
             stageRunner.runLatencyTest({
               serverUrl: url,
+              nodeWebSocket,
               pingCount: 1,
               connectTimeoutMs,
               cancellationToken,
@@ -305,6 +315,7 @@ export class SpeedTestEngine {
           stages.push(await buildStage('downloadStart'));
           downloadEstimation = await stageRunner.runDownloadEstimationTest({
             serverUrl,
+            nodeWebSocket,
             latencyMs,
             jitterMs,
             timeoutMs: this.config.estimationTimeoutMs,
@@ -315,6 +326,7 @@ export class SpeedTestEngine {
           downloadConnectionCount = getDownloadConnectionCount(downloadEstimation.speedMbps);
           downloadResult = await stageRunner.runDownloadSpeedTest({
             serverUrl,
+            nodeWebSocket,
             messageSizeKb: downloadMessageSizeKb,
             connectionCount: downloadConnectionCount,
             durationMs: this.config.downloadDurationMs,
@@ -341,6 +353,7 @@ export class SpeedTestEngine {
           stages.push(await buildStage('uploadStart'));
           uploadEstimation = await stageRunner.runUploadEstimationTest({
             serverUrl,
+            nodeWebSocket,
             latencyMs,
             jitterMs,
             timeoutMs: this.config.estimationTimeoutMs,
@@ -351,6 +364,7 @@ export class SpeedTestEngine {
           uploadConnectionCount = getUploadConnectionCount(uploadEstimation.speedMbps);
           uploadResult = await stageRunner.runUploadSpeedTest({
             serverUrl,
+            nodeWebSocket,
             messageSizeKb: uploadMessageSizeKb,
             connectionCount: uploadConnectionCount,
             durationMs: this.config.uploadDurationMs,
@@ -406,12 +420,14 @@ export class SpeedTestEngine {
         failedStage,
       });
 
+      // Upload before any callback runs, and a copy: a callback that throws, cancels, or changes
+      // the result it is handed doesn't change what is uploaded
+      if (!wasCancelled && !this.cancellationToken?.isCancelled) {
+        void this.#uploadResults(structuredClone(testResults));
+      }
+
       this.setStage('complete');
       this.callbacks.onComplete?.(latencyData, downloadResult, uploadResult, testResults);
-
-      if (!wasCancelled && !this.cancellationToken?.isCancelled) {
-        this.uploadResults(testResults);
-      }
       return testResults;
     } finally {
       runner?.close();
@@ -595,39 +611,39 @@ export class SpeedTestEngine {
     };
   }
 
-  private async uploadBatch(results: NetworkTestResultTestResults[]): Promise<void> {
-    await this.coverageMapApi.uploadSpeedTestResults(results);
+  async #uploadBatch(results: NetworkTestResultTestResults[]): Promise<void> {
+    await this.#coverageMapApi.uploadSpeedTestResults(results);
   }
 
-  private async uploadResults(results: NetworkTestResultTestResults): Promise<void> {
+  async #uploadResults(results: NetworkTestResultTestResults): Promise<void> {
     try {
-      await this.uploadBatch([results]);
+      await this.#uploadBatch([results]);
     } catch {
-      this.saveToLocalQueue(results);
+      this.#saveToLocalQueue(results);
     }
   }
 
-  private saveToLocalQueue(results: NetworkTestResultTestResults): void {
+  #saveToLocalQueue(results: NetworkTestResultTestResults): void {
     try {
-      const existing = localStorage.getItem(this.queueStorageKey);
+      const existing = localStorage.getItem(this.#queueStorageKey);
       const queue: NetworkTestResultTestResults[] = existing ? JSON.parse(existing) : [];
       queue.push(results);
-      localStorage.setItem(this.queueStorageKey, JSON.stringify(queue));
+      localStorage.setItem(this.#queueStorageKey, JSON.stringify(queue));
     } catch {
       // localStorage may be unavailable
     }
   }
 
-  private async flushUploadQueue(): Promise<void> {
+  async #flushUploadQueue(): Promise<void> {
     try {
-      const existing = localStorage.getItem(this.queueStorageKey);
+      const existing = localStorage.getItem(this.#queueStorageKey);
       if (!existing) return;
 
       const queue: NetworkTestResultTestResults[] = JSON.parse(existing);
       if (queue.length === 0) return;
 
-      await this.uploadBatch(queue);
-      localStorage.removeItem(this.queueStorageKey);
+      await this.#uploadBatch(queue);
+      localStorage.removeItem(this.#queueStorageKey);
     } catch {
       // Will retry on the next run
     }
@@ -679,7 +695,7 @@ function normalizeAndValidateApplicationInfo(
 function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): SpeedTestConfig {
   const config = { ...DEFAULT_CONFIG, ...overrides };
 
-  const rules: Array<[Exclude<keyof SpeedTestConfig, 'transport' | 'browserWorker'>, number, number]> = [
+  const rules: Array<[Exclude<keyof SpeedTestConfig, 'transport' | 'browserWorker' | 'nodeWebSocket'>, number, number]> = [
     ['pingCount', 5, 50],
     ['downloadDurationMs', 3000, 30000],
     ['uploadDurationMs', 3000, 30000],
@@ -696,6 +712,11 @@ function normalizeAndValidateConfig(overrides?: Partial<SpeedTestConfig>): Speed
   config.browserWorker = config.browserWorker ?? true;
   if (typeof config.browserWorker !== 'boolean') {
     throw new Error('SpeedTestEngineOptions.config.browserWorker must be a boolean');
+  }
+
+  config.nodeWebSocket = config.nodeWebSocket ?? true;
+  if (typeof config.nodeWebSocket !== 'boolean') {
+    throw new Error('SpeedTestEngineOptions.config.nodeWebSocket must be a boolean');
   }
 
   for (const [field, min, max] of rules) {

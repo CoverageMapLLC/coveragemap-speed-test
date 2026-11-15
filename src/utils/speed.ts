@@ -12,6 +12,29 @@ export function calculateSpeedMbps(bytes: number, durationMs: number): number {
   return roundTo3Decimals(bytes / (durationMs * 125));
 }
 
+/**
+ * Speed over a whole throughput stage: `elapsedMs` less the latency bias (`latencyMs + jitterMs`,
+ * the wait for the first byte), at least 1 ms.
+ */
+export function calculateStageSpeedMbps(
+  bytes: number,
+  elapsedMs: number,
+  latencyMs: number,
+  jitterMs: number
+): number {
+  return calculateSpeedMbps(bytes, Math.max(elapsedMs - (latencyMs + jitterMs), 1));
+}
+
+/** Speed from the measurement start (`fromMs` into the stage, `fromBytes` counted) to `elapsedMs`. */
+export function calculateSpeedSinceMbps(
+  bytes: number,
+  elapsedMs: number,
+  fromBytes: number,
+  fromMs: number
+): number {
+  return calculateSpeedMbps(bytes - fromBytes, elapsedMs - fromMs);
+}
+
 export function formatSpeed(mbps: number): string {
   if (mbps < 0.01) return '0';
   if (mbps < 1) return mbps.toFixed(2);

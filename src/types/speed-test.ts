@@ -36,6 +36,11 @@ export interface SpeedSnapshot {
 
 export interface SpeedTestData {
   durationMs: number;
+  /**
+   * Measured from 250 ms after the stage's first counted bytes to its end, so the ramp-up does
+   * not count. A stage that ended before that point is measured as a whole, less the latency
+   * bias (`latencyMs + jitterMs`).
+   */
   speedMbps: number;
   bytes: number;
   snapshots: SpeedSnapshot[];
@@ -52,9 +57,7 @@ export interface SpeedTestConfig {
   /**
    * Threads the download and upload stages spread their sockets across when the estimated
    * speed is 1 Gbps or more. `0` (the default) chooses automatically, `1` keeps every socket
-   * on the calling thread. Extra threads are Node.js worker threads, used with raw TCP or
-   * with Node's built-in WebSocket; a WebSocket polyfill keeps every socket on the calling
-   * thread.
+   * on the calling thread. Extra threads are Node.js worker threads, at most one per CPU core.
    */
   throughputThreads?: number;
   /**
@@ -74,6 +77,15 @@ export interface SpeedTestConfig {
    * page's main thread. `false` always uses the main thread. Ignored outside browsers.
    */
   browserWorker?: boolean;
+  /**
+   * In Node.js, open `ws://` and `wss://` sockets with the library's own WebSocket client
+   * (`true`, the default). It counts download data without copying it and does not mask
+   * upload data byte by byte, which a 10 Gbps test needs. `false` uses `globalThis.WebSocket`
+   * instead, for applications that rely on their own implementation (one that goes through a
+   * proxy, for example); multi-gigabit stages then run on worker threads only when the workers'
+   * `WebSocket` matches. Raw TCP is unaffected. Ignored outside Node.js.
+   */
+  nodeWebSocket?: boolean;
 }
 
 export type SpeedTestTransport = 'auto' | 'tcp' | 'ws' | 'wss';
@@ -94,6 +106,7 @@ export const DEFAULT_CONFIG: SpeedTestConfig = {
   throughputThreads: 0,
   transport: 'auto',
   browserWorker: true,
+  nodeWebSocket: true,
 };
 
 export interface SpeedTestCallbacks {
@@ -165,7 +178,7 @@ const AUTO_THROUGHPUT_THREADS = MULTI_GIGABIT_CONNECTION_COUNT / 2;
  * Threads for a throughput stage. Below 1 Gbps one thread is plenty. The estimate comes from
  * one socket on one thread and tops out at a few Gbps, so anything above 1 Gbps may be far
  * faster: those stages use `configuredThreads`, or 6 when it is 0. Worker threads are
- * further limited to half the CPU cores.
+ * further limited to one per CPU core.
  */
 export function getThroughputThreadCount(estimatedMbps: number, configuredThreads = 0): number {
   if (estimatedMbps < MULTI_GIGABIT_MBPS) return 1;

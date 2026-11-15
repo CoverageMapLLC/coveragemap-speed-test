@@ -31,3 +31,6 @@ export class CoverageMapApiClient {
     }
   }
 }
+
+// Every engine uploads through this class: freeze it so its upload can't be replaced for all of them
+Object.freeze(CoverageMapApiClient.prototype);

@@ -1,6 +1,6 @@
 import type { LatencyTestData, SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
-import { calculateSpeedMbps } from '../utils/speed.js';
+import { calculateSpeedSinceMbps, calculateStageSpeedMbps } from '../utils/speed.js';
 import { createLoadedLatencyMonitor } from './loaded-latency-test.js';
 import {
   openThroughputLane,
@@ -25,11 +25,26 @@ export interface ThroughputTestOptions {
   threads?: number;
   cancellationToken: CancellationToken;
   onSnapshot?: (snapshot: SpeedSnapshot) => void;
+  /** `false` opens WebSockets with `globalThis.WebSocket`, not the Node.js client. See `SpeedTestConfig.nodeWebSocket`. */
+  nodeWebSocket?: boolean;
 }
+
+/** The speed is measured from this long after the stage's first counted bytes, leaving out the ramp-up. */
+export const RAMP_UP_EXCLUSION_MS = 250;
+/** Loaded latency pings start this long after the stage's first counted bytes, once the link is loaded. */
+export const LOADED_LATENCY_DELAY_MS = 1000;
 
 /**
  * Runs a download or upload throughput stage: opens the lanes, starts them together once
  * every socket is connected, emits snapshots, and resolves after `durationMs`.
+ *
+ * The speed is measured from `RAMP_UP_EXCLUSION_MS` (250 ms) after the first bytes of the stage
+ * are counted (acknowledged, for upload) to its end, so the start of the ramp-up does not count.
+ * Before that point, or when the stage ends before it, the speed is the whole stage's less the
+ * latency bias. The stage still lasts
+ * `durationMs` from when the sockets opened. The loaded latency monitor connects at the start but
+ * pings from `LOADED_LATENCY_DELAY_MS` (1 s) after the first bytes, once the link carries the
+ * stage's traffic.
  */
 export function runThroughputTest(
   direction: ThroughputDirection,
@@ -46,6 +61,7 @@ export function runThroughputTest(
     threads = 1,
     cancellationToken,
     onSnapshot,
+    nodeWebSocket,
   } = options;
 
   return new Promise<SpeedTestData>((resolve, reject) => {
@@ -55,11 +71,18 @@ export function runThroughputTest(
     let settled = false;
     let snapshotTimer: ReturnType<typeof setInterval> | null = null;
     let finishTimer: ReturnType<typeof setTimeout> | null = null;
+    let rampUpTimer: ReturnType<typeof setTimeout> | null = null;
+    let loadedLatencyTimer: ReturnType<typeof setTimeout> | null = null;
+    let finishing = false;
+    let sawFirstBytes = false;
+    /** Where the measurement starts, in ms into the stage; null until then. */
+    let measuredFromMs: number | null = null;
+    let measuredFromBytes = 0;
     const snapshots: SpeedSnapshot[] = [];
-    const adjustmentMs = latencyMs + jitterMs;
     const loadedLatencyMonitor = createLoadedLatencyMonitor({
       serverUrl,
       cancellationToken,
+      nodeWebSocket,
     });
 
     const totalBytes = () => {
@@ -68,9 +91,43 @@ export function runThroughputTest(
       return bytes;
     };
 
+    /** The speed after `elapsed` ms and `bytes`: measured from the measurement start once there is one. */
+    const speed = (bytes: number, elapsed: number) =>
+      measuredFromMs !== null && elapsed > measuredFromMs
+        ? calculateSpeedSinceMbps(bytes, elapsed, measuredFromBytes, measuredFromMs)
+        : calculateStageSpeedMbps(bytes, elapsed, latencyMs, jitterMs);
+
+    const clearStageTimers = () => {
+      if (rampUpTimer) clearTimeout(rampUpTimer);
+      rampUpTimer = null;
+      if (loadedLatencyTimer) clearTimeout(loadedLatencyTimer);
+      loadedLatencyTimer = null;
+    };
+
+    /**
+     * The first bytes of the stage were counted: the link is loading. Schedules the measurement
+     * start and, independently, the first loaded latency ping.
+     */
+    const firstBytes = () => {
+      if (sawFirstBytes || settled || finishing || testStartTime === null) return;
+      sawFirstBytes = true;
+      rampUpTimer = setTimeout(() => {
+        rampUpTimer = null;
+        if (settled || finishing || testStartTime === null) return;
+        measuredFromMs = performance.now() - testStartTime;
+        measuredFromBytes = totalBytes();
+      }, RAMP_UP_EXCLUSION_MS);
+      loadedLatencyTimer = setTimeout(() => {
+        loadedLatencyTimer = null;
+        if (settled || finishing) return;
+        loadedLatencyMonitor.linkLoaded();
+      }, LOADED_LATENCY_DELAY_MS);
+    };
+
     const cleanup = () => {
       if (snapshotTimer) clearInterval(snapshotTimer);
       if (finishTimer) clearTimeout(finishTimer);
+      clearStageTimers();
       for (const lane of lanes ?? []) lane.close();
     };
 
@@ -89,10 +146,17 @@ export function runThroughputTest(
         settle(reject, new Error('Test never started'));
         return;
       }
+      finishing = true;
+      clearStageTimers();
+      if (snapshotTimer) clearInterval(snapshotTimer);
+      snapshotTimer = null;
       const elapsed = performance.now() - testStartTime;
       const bytes = totalBytes();
-      const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
-      const speedMbps = calculateSpeedMbps(bytes, effectiveDurationMs);
+      const speedMbps = speed(bytes, elapsed);
+      // The stage is over: ask for no more data (no refill goes out after the stage), but keep
+      // the sockets open, so the loaded latency monitor's last ping still measures a loaded link
+      // while it waits for the PONG. cleanup() closes them once the monitor is done.
+      for (const lane of lanes ?? []) lane.stopRequests();
 
       let loadedLatency: LatencyTestData | null = null;
       try {
@@ -122,10 +186,9 @@ export function runThroughputTest(
         if (testStartTime === null || settled) return;
         const elapsed = performance.now() - testStartTime;
         const bytes = totalBytes();
-        const effectiveDurationMs = Math.max(elapsed - adjustmentMs, 1);
         const snapshot: SpeedSnapshot = {
           timeOffsetMs: elapsed,
-          speedMbps: calculateSpeedMbps(bytes, effectiveDurationMs),
+          speedMbps: speed(bytes, elapsed),
           bytes,
         };
         snapshots.push(snapshot);
@@ -158,9 +221,12 @@ export function runThroughputTest(
         maybeStart();
       },
       onError: (error) => settle(reject, error),
+      onBytes: () => {
+        if (!sawFirstBytes) firstBytes();
+      },
     };
 
-    const laneOptions = { serverUrl, connectionCount, messageSizeKb };
+    const laneOptions = { serverUrl, connectionCount, messageSizeKb, nodeWebSocket };
     const openLocalLane = () => openThroughputLane(direction, laneOptions, callbacks);
 
     const attach = (opened: ThroughputLane[]) => {

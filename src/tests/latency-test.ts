@@ -11,10 +11,12 @@ export interface LatencyTestOptions {
   connectTimeoutMs?: number;
   cancellationToken: CancellationToken;
   onPing?: (latencyMs: number, index: number) => void;
+  /** `false` opens WebSockets with `globalThis.WebSocket`, not the Node.js client. See `SpeedTestConfig.nodeWebSocket`. */
+  nodeWebSocket?: boolean;
 }
 
 export async function runLatencyTest(options: LatencyTestOptions): Promise<LatencyTestData> {
-  const { serverUrl, pingCount, timeoutMs = 10000, connectTimeoutMs, cancellationToken, onPing } = options;
+  const { serverUrl, pingCount, timeoutMs = 10000, connectTimeoutMs, cancellationToken, onPing, nodeWebSocket } = options;
 
   return new Promise<LatencyTestData>((resolve, reject) => {
     let socket: WebSocket;
@@ -78,7 +80,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
     }, timeoutMs);
 
     try {
-      socket = openSocket(serverUrl, { connectTimeoutMs });
+      socket = openSocket(serverUrl, { connectTimeoutMs, nodeWebSocket });
       socket.binaryType = 'arraybuffer';
     } catch (error) {
       cleanup();

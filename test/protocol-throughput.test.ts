@@ -54,6 +54,34 @@ class ThroughputSocketMock {
   }
 }
 
+/** Streams a 4 KiB frame every 10 ms after START, so a stage keeps moving data past its first second. */
+class StreamingDownloadSocketMock extends ThroughputSocketMock {
+  private streamTimer: ReturnType<typeof setInterval> | null = null;
+
+  send(payload: string | Uint8Array): void {
+    if (typeof payload === 'string' && payload.startsWith('START')) {
+      if (this.streamTimer) return;
+      this.streamTimer = setInterval(() => {
+        if (this.readyState === ThroughputSocketMock.OPEN) {
+          this.onmessage?.({ data: new ArrayBuffer(4 * 1024) } as MessageEvent);
+        }
+      }, 10);
+      return;
+    }
+    super.send(payload);
+  }
+
+  close(): void {
+    if (this.streamTimer) clearInterval(this.streamTimer);
+    super.close();
+  }
+}
+
+/** Fake clock for stages that last past the 1 s loaded latency delay. */
+const FAKE_CLOCK: Parameters<typeof vi.useFakeTimers>[0] = {
+  toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'],
+};
+
 class ReplenishingDownloadSocketMock extends ThroughputSocketMock {
   static commands: string[] = [];
 
@@ -123,19 +151,23 @@ describe('throughput protocol runners', () => {
   });
 
   it('runs download throughput and emits snapshots', async () => {
-    vi.stubGlobal('WebSocket', ThroughputSocketMock as unknown as typeof WebSocket);
+    vi.useFakeTimers(FAKE_CLOCK);
+    vi.stubGlobal('WebSocket', StreamingDownloadSocketMock as unknown as typeof WebSocket);
     const snapshots: number[] = [];
-    const result = await runDownloadSpeedTest({
+    // Longer than the 1 s loaded latency delay, so the stage also measures loaded latency.
+    const promise = runDownloadSpeedTest({
       serverUrl: 'wss://speed.example.com/v1/ws',
       messageSizeKb: 64,
       connectionCount: 1,
-      durationMs: 40,
+      durationMs: 1500,
       latencyMs: 1,
       jitterMs: 1,
-      snapshotIntervalMs: 10,
+      snapshotIntervalMs: 100,
       cancellationToken: new CancellationToken(),
       onSnapshot: (snapshot) => snapshots.push(snapshot.bytes),
     });
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await promise;
 
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.speedMbps).toBeGreaterThan(0);
@@ -145,7 +177,7 @@ describe('throughput protocol runners', () => {
     expect(result.loadedLatency!.minLatency).toBeGreaterThan(0);
   });
 
-  it('requests a doubled download packet size after a batch is exhausted', async () => {
+  it('requests a tripled download message size once 400 messages of the first batch arrived', async () => {
     vi.useFakeTimers();
     ReplenishingDownloadSocketMock.commands = [];
     vi.stubGlobal('WebSocket', ReplenishingDownloadSocketMock as unknown as typeof WebSocket);
@@ -163,14 +195,14 @@ describe('throughput protocol runners', () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 500', 'START 128 500']);
+    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 500', 'START 192 500']);
 
     await vi.advanceTimersByTimeAsync(39);
     const result = await promise;
     expect(result.bytes).toBe(64 * 1024 * 500);
   });
 
-  it('ignores extra download frames that arrive after a batch is exhausted', async () => {
+  it('counts a message of the next batch that arrives before the first batch is done', async () => {
     vi.useFakeTimers();
     ReentrantExtraFrameDownloadSocketMock.commands = [];
     vi.stubGlobal('WebSocket', ReentrantExtraFrameDownloadSocketMock as unknown as typeof WebSocket);
@@ -190,33 +222,44 @@ describe('throughput protocol runners', () => {
 
     expect(ReentrantExtraFrameDownloadSocketMock.commands).toEqual([
       'START 64 500',
-      'START 128 500',
+      'START 192 500',
     ]);
 
     await vi.advanceTimersByTimeAsync(39);
     const result = await promise;
-    expect(result.bytes).toBe(64 * 1024 * 500);
+    // All 500 messages of the first batch plus the one 192 KB message of the second.
+    expect(result.bytes).toBe(64 * 1024 * 500 + 192 * 1024);
   });
 
   it('completes download when loaded latency monitor receives no PONG samples', async () => {
-    class SilentPingThroughputSocketMock extends ThroughputSocketMock {
+    const pings: string[] = [];
+    class SilentPingThroughputSocketMock extends StreamingDownloadSocketMock {
       send(payload: string | Uint8Array): void {
-        if (payload === 'PING') return;
+        if (payload === 'PING') {
+          pings.push(payload);
+          return;
+        }
         super.send(payload);
       }
     }
 
+    vi.useFakeTimers(FAKE_CLOCK);
     vi.stubGlobal('WebSocket', SilentPingThroughputSocketMock as unknown as typeof WebSocket);
-    const result = await runDownloadSpeedTest({
+    const promise = runDownloadSpeedTest({
       serverUrl: 'wss://speed.example.com/v1/ws',
       messageSizeKb: 64,
       connectionCount: 1,
-      durationMs: 40,
+      durationMs: 1500,
       latencyMs: 1,
       jitterMs: 1,
-      snapshotIntervalMs: 10,
+      snapshotIntervalMs: 100,
       cancellationToken: new CancellationToken(),
     });
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await promise;
+
+    // A PING went out after the 1 s delay but was never answered.
+    expect(pings).toEqual(['PING']);
 
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.speedMbps).toBeGreaterThan(0);
@@ -290,17 +333,20 @@ describe('throughput protocol runners', () => {
   });
 
   it('runs upload throughput and tracks acknowledged bytes', async () => {
+    vi.useFakeTimers(FAKE_CLOCK);
     vi.stubGlobal('WebSocket', ThroughputSocketMock as unknown as typeof WebSocket);
-    const result = await runUploadSpeedTest({
+    const promise = runUploadSpeedTest({
       serverUrl: 'wss://speed.example.com/v1/ws',
       messageSizeKb: 8,
       connectionCount: 1,
-      durationMs: 40,
+      durationMs: 1500,
       latencyMs: 1,
       jitterMs: 1,
-      snapshotIntervalMs: 10,
+      snapshotIntervalMs: 100,
       cancellationToken: new CancellationToken(),
     });
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await promise;
 
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.speedMbps).toBeGreaterThan(0);

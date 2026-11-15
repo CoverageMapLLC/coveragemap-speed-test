@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0
+
+### Improvements
+
+- **10 Gbps over secure WebSocket in Node.js**: `ws://` and `wss://` sockets in Node.js now come from the library's own WebSocket client instead of `globalThis.WebSocket`. Node's built-in client masked every upload byte and copied every download byte in JavaScript, which took half of the upload thread. The new client counts download messages without copying them and sends upload chunks from one premasked zero frame per size (see the protocol docs). Multi-gigabit stages also use up to one worker thread per CPU core instead of half the cores, so two core machines now use two threads instead of one. On a two core VM against the Cloudflare CDN server, a full run went from about 7 Gbps down and 3.3 Gbps up to 14.5 to 17.7 Gbps down and 16 Gbps up, loaded latency from 20 to 90 ms to 2 to 3 ms, and peak memory from 270 to 195 MB. No `ws` polyfill is needed on Node.js 20 any more; one that is installed is only used if the library's client cannot load, or with the new `config.nodeWebSocket: false`. Bun and Deno keep their native `WebSocket`.
+- **Ramp-up left out of throughput speeds**: Download and upload speeds are now measured from 250 ms after the stage's first bytes are counted (the first `ACK` for upload) to the stage's end, so the slow start of the connections no longer lowers the result. Everything after that point counts, so a ramp-up that lasts longer still lowers the speed. The stage still lasts its full duration from when the sockets opened. Progress snapshots use the same rule, so the final speed continues the last progress values. A stage that ends before that point measures the whole stage as before. The 250 ms is fixed, not a configuration option. This matches the CoverageMap Android and iOS speed test libraries.
+- **Loaded latency measures a loaded link**: The loaded latency socket still connects when the stage starts, but sends its first `PING` 1 s after the stage's first bytes, instead of while the link is still idle. The delay is fixed and independent of the ramp-up exclusion. Pings now go 500 ms after each `PONG` (was 1000 ms). Transfer sockets stay open until the last ping is answered, so that ping still measures a loaded link. A stage that ends before the delay reports no loaded latency (`null`).
+- **Download refills overlap**: Each download socket now asks for its next 500 messages when 100 of the current request are still due, instead of after the last one arrived, so the server never runs out of data to send between batches. The server sends overlapping batches side by side; the client keeps a running count of the messages still due, so interleaved messages of different sizes all count. Each refill asks for three times the previous message size (was twice), still at most 5 MB. Servers built on `@coveragemap/speed-transport` 0.2.0 accept a `START` while a batch is still sending.
+
+### New Features
+
+- **`config.nodeWebSocket`**: `true` (default) uses the library's own WebSocket client in Node.js; `false` uses `globalThis.WebSocket` for every socket of the run, for applications that rely on their own implementation (an HTTP proxy, extra headers, custom TLS options). Ignored outside Node.js.
+
+### Breaking Changes
+
+- **Result uploads can't be turned off**: Completed results are always uploaded, even from subclasses or when `onComplete` throws. `api.coverageMapApiBaseUrl` must now be an `https://` URL on `coveragemap.com` or a subdomain (or loopback for a fully local setup).
+- `SpeedTestData.speedMbps`, and with it `downloadSpeed`, `uploadSpeed`, `downloadList`, and `uploadList` in the result, now leave out the ramp-up and read higher on most links.
+
+### Bug Fixes
+
+- The Node.js WebSocket client reports dropped connections as errors so latency fails fast and download estimation can reconnect, instead of waiting out the stage timeout.
+
 ## 0.5.0
 
 ### Improvements
