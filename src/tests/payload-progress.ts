@@ -6,8 +6,10 @@
  * API only delivers whole messages.
  *
  * Both sockets read frames with speed-transport's `FrameParser`, whose public
- * `onPayloadProgress` hook (speed-transport 0.3.0) reports a message's bytes once per read and
- * always before the message itself. The raw TCP socket exposes the same as `onpayloadprogress`.
+ * `onPayloadProgress` hook (speed-transport 0.3.0) reports bytes as each read is parsed: once
+ * per message the read carries bytes of, and always before that message itself, so the reports
+ * for one message add up to its length. Callers sum them. The raw TCP socket exposes the same
+ * as `onpayloadprogress`.
  */
 
 /** A socket that reports binary message payload bytes as they arrive. */

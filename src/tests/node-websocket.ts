@@ -13,8 +13,9 @@
  *   repeats the key, so the masked frame is built once and sent again and again.
  * - **Reads go into one buffer per socket** (`onread`), with no allocation or stream
  *   machinery per read.
- * - **Download bytes are reported as they arrive** (`onpayloadprogress`), once per read, so a
- *   snapshot or the end of a stage also counts the message still arriving.
+ * - **Download bytes are reported as they arrive** (`onpayloadprogress`): for each read,
+ *   once per message it carries bytes of, so a snapshot or the end of a stage also counts the
+ *   message still arriving.
  *
  * The masking key of the premasked frames is random but reused for every frame of that size.
  * RFC 6455 asks for a fresh key per frame so that page scripts cannot choose the bytes that
@@ -188,7 +189,7 @@ export class NodeWebSocket extends EventTarget {
         onPong: () => {},
         onClose: (code, reason) => this.onPeerClose(code, reason),
         onError: (code, reason) => this.failConnection(code, reason),
-        // speed-transport reports a message's bytes once per read, before the message itself.
+        // speed-transport reports the bytes of each read per message, before that message itself.
         onPayloadProgress: (bytes, binary) => {
           if (binary && this.readyState === NodeWebSocket.OPEN) this.onpayloadprogress?.(bytes);
         },
