@@ -1,6 +1,7 @@
 import type { SpeedTestServer } from '../types/speed-server.js';
 import type { SpeedTestTransport } from '../types/speed-test.js';
 import { SpeedTestError } from '../utils/failure.js';
+import { trackBinaryPayload, type PayloadProgressSocket } from './payload-progress.js';
 
 /**
  * Sockets for every test stage. The URL picks the transport: `ws://` and `wss://` use the
@@ -135,12 +136,27 @@ export function openSocket(url: string, options: OpenSocketOptions = {}): WebSoc
   const connectTimeout = options.connectTimeoutMs ? { connectTimeoutMs: options.connectTimeoutMs } : {};
   if (isTcpUrl(url)) {
     if (!tcpTransport) throw new SpeedTestError('unreachable', 'The raw TCP transport is not loaded');
-    return new tcpTransport.SpeedTransportSocket(url, { binaryPayloads: 'discard', ...connectTimeout }) as WebSocket;
+    const socket = new tcpTransport.SpeedTransportSocket(url, { binaryPayloads: 'discard', ...connectTimeout });
+    reportTcpPayloadProgress(socket as WebSocket & Partial<PayloadProgressSocket>);
+    return socket as WebSocket;
   }
   if (usesNodeWebSocket(url, options.nodeWebSocket !== false)) {
     return new nodeWebSocket!.NodeWebSocket(url, connectTimeout) as WebSocket;
   }
   return new WebSocket(url);
+}
+
+/**
+ * Gives a raw TCP socket `onpayloadprogress`, which the Node.js WebSocket client has built in.
+ * speed-transport's socket does not offer it, so this follows its frame parser, which it keeps
+ * in the `parser` property. If that changes in a later version, the socket keeps counting whole
+ * messages.
+ */
+function reportTcpPayloadProgress(socket: WebSocket & Partial<PayloadProgressSocket>): void {
+  const tracked = trackBinaryPayload((socket as unknown as { parser?: unknown }).parser, (bytes) => {
+    if (socket.readyState === SOCKET_OPEN) socket.onpayloadprogress?.(bytes);
+  });
+  if (tracked) socket.onpayloadprogress = null;
 }
 
 /**

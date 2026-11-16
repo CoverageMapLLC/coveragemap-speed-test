@@ -13,6 +13,8 @@
  *   repeats the key, so the masked frame is built once and sent again and again.
  * - **Reads go into one buffer per socket** (`onread`), with no allocation or stream
  *   machinery per read.
+ * - **Download bytes are reported as they arrive** (`onpayloadprogress`), once per read, so a
+ *   snapshot or the end of a stage also counts the message still arriving.
  *
  * The masking key of the premasked frames is random but reused for every frame of that size.
  * RFC 6455 asks for a fresh key per frame so that page scripts cannot choose the bytes that
@@ -31,6 +33,7 @@ import {
   encodeFrameHeader,
   encodeMaskedFrame,
 } from '@coveragemap/speed-transport';
+import { trackBinaryPayload } from './payload-progress.js';
 
 export interface NodeWebSocketOptions {
   /** Fail if the connection and handshake have not completed by then. Defaults to 10 s. */
@@ -152,6 +155,11 @@ export class NodeWebSocket extends EventTarget {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   onclose: ((event: NodeWebSocketCloseEvent) => void) | null = null;
+  /**
+   * Binary message payload bytes as they arrive (see `PayloadProgressSocket`). Present only
+   * when the frame parser supports it; `declare` keeps it off sockets that do not.
+   */
+  declare onpayloadprogress?: ((bytes: number) => void) | null;
 
   private readonly socket: net.Socket;
   private readonly parser: FrameParser;
@@ -186,6 +194,10 @@ export class NodeWebSocket extends EventTarget {
         onError: (code, reason) => this.failConnection(code, reason),
       }
     );
+    const tracked = trackBinaryPayload(this.parser, (bytes) => {
+      if (this.readyState === NodeWebSocket.OPEN) this.onpayloadprogress?.(bytes);
+    });
+    if (tracked) this.onpayloadprogress = null;
 
     const readBuffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
     const onread = {

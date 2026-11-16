@@ -6,6 +6,7 @@
  */
 
 import { SpeedTestError, getFailureReasonOr } from '../utils/failure.js';
+import { supportsPayloadProgress } from './payload-progress.js';
 import { SOCKET_CLOSED, SOCKET_OPEN, openSocket, sendZeroFilled } from './sockets.js';
 
 export interface ThroughputLaneOptions {
@@ -142,6 +143,11 @@ export function getNextDownloadMessageSizeKb(messageSizeKb: number): number {
  * batch queued. The server sends overlapping batches at once, so their messages interleave
  * and differ in size; only the running total matters. Messages beyond everything requested,
  * and messages after the lane closed, are not counted.
+ *
+ * Sockets that report payload bytes as they arrive (`onpayloadprogress`: raw TCP and the
+ * Node.js WebSocket client) are counted that way, so snapshots and the end of the stage include
+ * the messages still arriving, as in the native libraries. Other sockets (browsers) are counted
+ * per whole message.
  */
 export function openDownloadLane(
   options: ThroughputLaneOptions,
@@ -162,13 +168,25 @@ export function openDownloadLane(
   };
 
   const sockets = connectLane('download', options, callbacks, () => closed, (socket) => {
+    // Every byte of a message is reported before its message event, while it is still due.
+    const countsAsBytesArrive = supportsPayloadProgress(socket);
+    if (countsAsBytesArrive) {
+      socket.onpayloadprogress = (received) => {
+        if (closed || (outstandingBySocket.get(socket) ?? 0) <= 0) return;
+        bytes += received;
+        callbacks.onBytes?.(bytes);
+      };
+    }
+
     socket.onmessage = (event) => {
       if (closed || !(event.data instanceof ArrayBuffer)) return;
       const outstanding = outstandingBySocket.get(socket) ?? 0;
       if (outstanding <= 0) return;
 
-      bytes += event.data.byteLength;
-      callbacks.onBytes?.(bytes);
+      if (!countsAsBytesArrive) {
+        bytes += event.data.byteLength;
+        callbacks.onBytes?.(bytes);
+      }
       outstandingBySocket.set(socket, outstanding - 1);
 
       if (outstanding - 1 <= DOWNLOAD_REFILL_THRESHOLD) {
