@@ -367,9 +367,9 @@ interface SpeedTestConfig {
 
 | Field | Type | Default | Range | Description |
 |-------|------|---------|-------|-------------|
-| `pingCount` | `number` | `10` | 5 – 50 | Number of RTT probes collected during the latency stage. Higher values produce a more stable baseline; lower values shorten total run time. |
-| `downloadDurationMs` | `number` | `10000` | 3000 – 30000 | Duration of the sustained download throughput stage in milliseconds. Longer durations improve smoothing on unstable links. |
-| `uploadDurationMs` | `number` | `10000` | 3000 – 30000 | Duration of the sustained upload throughput stage in milliseconds. Behaves like `downloadDurationMs` for upstream. |
+| `pingCount` | `number` | `15` | 5 – 50 | Number of RTT probes collected during the latency stage. Higher values produce a more stable baseline; lower values shorten total run time. |
+| `downloadDurationMs` | `number` | `7000` | 3000 – 30000 | Duration of the sustained download throughput stage in milliseconds. Longer durations improve smoothing on unstable links. |
+| `uploadDurationMs` | `number` | `7000` | 3000 – 30000 | Duration of the sustained upload throughput stage in milliseconds. Behaves like `downloadDurationMs` for upstream. |
 | `snapshotIntervalMs` | `number` | `100` | 50 – 5000 | Interval between progress snapshots emitted during sustained throughput stages. Lower values increase callback frequency. |
 | `latencyTimeoutMs` | `number` | `10000` | 3000 – 30000 | Maximum time allowed for the latency stage to collect sufficient probe responses. The stage fails if this window is exceeded. |
 | `estimationTimeoutMs` | `number` | `15000` | 3000 – 30000 | Maximum time allowed for download and upload estimation phases. Prevents the run from hanging during pre-throughput sizing. |

@@ -337,7 +337,7 @@ The downstream stages use `minLatency` and `minJitter` (the most optimistic esti
 
 | Parameter | Default | Configurable range |
 |---|---|---|
-| `pingCount` | 10 | 5 – 50 |
+| `pingCount` | 15 | 5 – 50 |
 | `latencyTimeoutMs` | 10,000 ms | 3,000 – 30,000 ms |
 
 ---
@@ -538,7 +538,7 @@ Because these probes run while the download sockets are saturating the link, the
 
 | Parameter | Default | Configurable range |
 |---|---|---|
-| `downloadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
+| `downloadDurationMs` | 7,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
 | Ramp-up exclusion after the first bytes | 250 ms | (fixed) |
 | Loaded latency delay after the first bytes | 1,000 ms | (fixed) |
@@ -657,7 +657,7 @@ Identical to download: `snapshotIntervalMs` periodic snapshots, a wall-clock `du
 
 | Parameter | Default | Configurable range |
 |---|---|---|
-| `uploadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
+| `uploadDurationMs` | 7,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
 | Refill timer | 5 ms | (fixed) |
 | Ramp-up exclusion after the first `ACK` | 250 ms | (fixed) |
@@ -821,9 +821,9 @@ await engine.retryQueuedUploads();
 
 | Config field | Default | Min | Max | Description |
 |---|---|---|---|---|
-| `pingCount` | 10 | 5 | 50 | Number of PING/PONG probes per latency stage |
-| `downloadDurationMs` | 10,000 | 3,000 | 30,000 | Download throughput stage wall time (ms) |
-| `uploadDurationMs` | 10,000 | 3,000 | 30,000 | Upload throughput stage wall time (ms) |
+| `pingCount` | 15 | 5 | 50 | Number of PING/PONG probes per latency stage |
+| `downloadDurationMs` | 7,000 | 3,000 | 30,000 | Download throughput stage wall time (ms) |
+| `uploadDurationMs` | 7,000 | 3,000 | 30,000 | Upload throughput stage wall time (ms) |
 | `snapshotIntervalMs` | 100 | 50 | 5,000 | Progress snapshot interval (ms) |
 | `latencyTimeoutMs` | 10,000 | 3,000 | 30,000 | Timeout for latency stage (ms) |
 | `estimationTimeoutMs` | 15,000 | 3,000 | 30,000 | Timeout for estimation stages (ms) |

@@ -1154,9 +1154,9 @@ describe('engine regression', () => {
     // Mock upload estimation returns 18.4 Mbps → packetSize=512 KB (10–50 range), connectionCount=6
     expect(result.testType.uploadPacketSize).toBe(512);
     expect(result.testType.uploadConnectionCount).toBe(6);
-    // Durations reflect the default config (10 s)
-    expect(result.testType.downloadTestDuration).toBe(10000);
-    expect(result.testType.uploadTestDuration).toBe(10000);
+    // Durations reflect the default config (7 s)
+    expect(result.testType.downloadTestDuration).toBe(7000);
+    expect(result.testType.uploadTestDuration).toBe(7000);
   });
 
   it('sets download testsRun flag and related testType fields to null/false when download is disabled', async () => {
@@ -1188,7 +1188,7 @@ describe('engine regression', () => {
     // Upload fields should still be populated
     expect(result.testType.uploadPacketSize).toBe(512);
     expect(result.testType.uploadConnectionCount).toBe(6);
-    expect(result.testType.uploadTestDuration).toBe(10000);
+    expect(result.testType.uploadTestDuration).toBe(7000);
   });
 
   it('sets upload testsRun flag and related testType fields to null/false when upload is disabled', async () => {
@@ -1220,7 +1220,7 @@ describe('engine regression', () => {
     // Download fields should still be populated
     expect(result.testType.downloadPacketSize).toBe(128);
     expect(result.testType.downloadConnectionCount).toBe(6);
-    expect(result.testType.downloadTestDuration).toBe(10000);
+    expect(result.testType.downloadTestDuration).toBe(7000);
   });
 
   it('leaves testType connection/packet fields null when estimation fails before populating them', async () => {
