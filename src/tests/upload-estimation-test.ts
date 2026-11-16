@@ -1,5 +1,6 @@
 import type { SpeedEstimationResult } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
+import { SpeedTestError, getFailureReasonOr } from '../utils/failure.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
 import { createStallMonitor } from '../utils/stall-monitor.js';
 import { SOCKET_CLOSED, openSocket, sendZeroFilled } from './sockets.js';
@@ -65,7 +66,8 @@ export async function runUploadEstimationTest(
     timeoutId = setTimeout(() => {
       settle(
         reject,
-        new Error(
+        new SpeedTestError(
+          didConnect ? 'timeout' : 'connectionTimeout',
           `Upload estimation timed out after ${timeoutMs}ms. Connected: ${didConnect}, Retries: ${retries}`
         )
       );
@@ -91,7 +93,7 @@ export async function runUploadEstimationTest(
           retries++;
           setTimeout(() => sendChunks(), 1000);
         } else {
-          settle(reject, new Error(`Failed to send upload data: ${error}`));
+          settle(reject, new SpeedTestError('connectionFailed', `Failed to send upload data: ${error}`));
         }
       }
     };
@@ -100,7 +102,7 @@ export async function runUploadEstimationTest(
       socket = openSocket(serverUrl, { nodeWebSocket });
       socket.binaryType = 'arraybuffer';
     } catch (error) {
-      reject(new Error(`Failed to create WebSocket: ${error}`));
+      reject(new SpeedTestError(getFailureReasonOr(error, 'connectionFailed'), `Failed to create WebSocket: ${error}`));
       return;
     }
 
@@ -142,12 +144,12 @@ export async function runUploadEstimationTest(
     };
 
     socket.onerror = () => {
-      settle(reject, new Error('WebSocket error during upload estimation'));
+      settle(reject, new SpeedTestError('connectionFailed', 'WebSocket error during upload estimation'));
     };
 
     socket.onclose = () => {
       if (!settled) {
-        settle(reject, new Error('WebSocket closed before upload estimation completed'));
+        settle(reject, new SpeedTestError('connectionFailed', 'WebSocket closed before upload estimation completed'));
       }
     };
   });

@@ -5,6 +5,7 @@ import {
   type ThroughputLaneCallbacks,
   type ThroughputLaneOptions,
 } from './throughput-lanes.js';
+import { SpeedTestError, getFailureReason, type SpeedTestFailureReason } from '../utils/failure.js';
 import { isNodeRuntime, isTcpUrl, loadNodeWebSocket, loadTcpTransport, usesNodeWebSocket } from './sockets.js';
 
 /**
@@ -37,7 +38,8 @@ export type WorkerToHostMessage =
   | { type: 'open' }
   /** The lane counted its first bytes, sent once: the runner starts the ramp-up exclusion. */
   | { type: 'bytes' }
-  | { type: 'error'; message: string };
+  /** A socket failed; `reason` is the error's failure reason, so it survives the thread boundary. */
+  | { type: 'error'; message: string; reason: SpeedTestFailureReason };
 
 export type HostToWorkerMessage = { type: 'start' } | { type: 'stopRequests' } | { type: 'close' };
 
@@ -95,7 +97,7 @@ export async function hostWorkerLane(port: LanePort, data: WorkerLaneData): Prom
   try {
     lane = openThroughputLane(data.direction, data, {
       onOpen: () => port.postMessage({ type: 'open' }),
-      onError: (error) => port.postMessage({ type: 'error', message: error.message }),
+      onError: (error) => port.postMessage({ type: 'error', message: error.message, reason: getFailureReason(error) }),
       onBytes: (bytes) => {
         Atomics.store(counters, data.slot, BigInt(bytes));
         if (!reportedBytes) {
@@ -105,7 +107,11 @@ export async function hostWorkerLane(port: LanePort, data: WorkerLaneData): Prom
       },
     });
   } catch (error) {
-    port.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });
+    port.postMessage({
+      type: 'error',
+      message: error instanceof Error ? error.message : String(error),
+      reason: getFailureReason(error),
+    });
     return;
   }
 
@@ -240,8 +246,8 @@ export async function openWorkerLanes(
           case 'error':
             // A socket failed to connect. That fails the stage whether or not every worker
             // is ready yet.
-            if (state === 'resolved') callbacks.onError(new Error(message.message));
-            else abandon(new Error(message.message));
+            if (state === 'resolved') callbacks.onError(new SpeedTestError(message.reason, message.message));
+            else abandon(new SpeedTestError(message.reason, message.message));
             break;
         }
       });

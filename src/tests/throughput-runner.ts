@@ -1,5 +1,6 @@
 import type { LatencyTestData, SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
+import { SpeedTestError } from '../utils/failure.js';
 import { calculateSpeedSinceMbps, calculateStageSpeedMbps } from '../utils/speed.js';
 import { createLoadedLatencyMonitor } from './loaded-latency-test.js';
 import {
@@ -143,7 +144,7 @@ export function runThroughputTest(
 
     const finishTest = async () => {
       if (testStartTime === null) {
-        settle(reject, new Error('Test never started'));
+        settle(reject, new SpeedTestError('transferTimeout', 'Test never started'));
         return;
       }
       finishing = true;

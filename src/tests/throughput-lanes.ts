@@ -5,6 +5,7 @@
  * bytes.
  */
 
+import { SpeedTestError, getFailureReasonOr } from '../utils/failure.js';
 import { SOCKET_CLOSED, SOCKET_OPEN, openSocket, sendZeroFilled } from './sockets.js';
 
 export interface ThroughputLaneOptions {
@@ -97,7 +98,10 @@ function connectLane(
       socket = openSocket(options.serverUrl, { nodeWebSocket: options.nodeWebSocket });
     } catch (error) {
       closeSockets(sockets);
-      throw new Error(`Failed to create ${direction} WebSocket ${index}: ${error}`);
+      throw new SpeedTestError(
+        getFailureReasonOr(error, 'connectionFailed'),
+        `Failed to create ${direction} WebSocket ${index}: ${error}`
+      );
     }
     socket.binaryType = 'arraybuffer';
 
@@ -111,7 +115,7 @@ function connectLane(
 
     socket.onerror = () => {
       if (!opened && !isClosed()) {
-        callbacks.onError(new Error(`${label} WebSocket connection ${index} failed`));
+        callbacks.onError(new SpeedTestError('connectionFailed', `${label} WebSocket connection ${index} failed`));
       }
     };
 

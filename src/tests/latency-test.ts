@@ -1,6 +1,7 @@
 import type { LatencyTestData } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { roundTo3Decimals } from '../utils/speed.js';
+import { SpeedTestError, getFailureReasonOr } from '../utils/failure.js';
 import { SOCKET_CLOSED, SocketConnectError, openSocket } from './sockets.js';
 
 export interface LatencyTestOptions {
@@ -42,7 +43,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
     const complete = () => {
       cleanup();
       if (pingTimes.length === 0) {
-        reject(new Error('No ping responses received'));
+        reject(new SpeedTestError('timeout', 'No ping responses received'));
         return;
       }
       resolve(computeLatencyData(pingTimes));
@@ -60,7 +61,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
         sentPings++;
       } catch (error) {
         cleanup();
-        reject(new Error(`Failed to send ping: ${error}`));
+        reject(new SpeedTestError('connectionFailed', `Failed to send ping: ${error}`));
       }
     };
 
@@ -75,7 +76,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
       } else {
         cleanup();
         const message = `Latency test timed out after ${timeoutMs}ms. Connected: ${didConnect}, Pings sent: ${sentPings}`;
-        reject(didConnect ? new Error(message) : new SocketConnectError(message));
+        reject(didConnect ? new SpeedTestError('timeout', message) : new SocketConnectError(message, 'connectionTimeout'));
       }
     }, timeoutMs);
 
@@ -84,7 +85,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
       socket.binaryType = 'arraybuffer';
     } catch (error) {
       cleanup();
-      reject(new Error(`Failed to create WebSocket: ${error}`));
+      reject(new SpeedTestError(getFailureReasonOr(error, 'connectionFailed'), `Failed to create WebSocket: ${error}`));
       return;
     }
 
@@ -94,7 +95,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
       connectTimer = setTimeout(() => {
         if (didConnect) return;
         cleanup();
-        reject(new SocketConnectError(`Connection not open after ${connectTimeoutMs}ms`));
+        reject(new SocketConnectError(`Connection not open after ${connectTimeoutMs}ms`, 'connectionTimeout'));
       }, connectTimeoutMs);
     }
 
@@ -127,7 +128,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
       // Failing before the socket opened means the server could not be reached this way.
       reject(
         didConnect
-          ? new Error('WebSocket error during latency test')
+          ? new SpeedTestError('connectionFailed', 'WebSocket error during latency test')
           : new SocketConnectError('WebSocket connection failed during latency test')
       );
     };

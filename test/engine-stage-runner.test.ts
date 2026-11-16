@@ -138,7 +138,7 @@ describe('engine stage runner', () => {
     const result = await engine.run(server);
 
     expect(result.results.testStatus).toBe('failed');
-    expect(result.results.measurements.failedReason).toBe('The speed test worker failed: crashed');
+    expect(result.results.measurements.failedReason).toBe('unknown: The speed test worker failed: crashed');
     expect(result.results.measurements.failedStage).toBe('uploadStart');
     expect(runner.close).toHaveBeenCalledTimes(1);
   });
