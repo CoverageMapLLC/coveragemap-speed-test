@@ -241,7 +241,7 @@ export class SpeedTestEngine {
       const cancellationToken = this.cancellationToken;
       // In browsers the stages run in a Web Worker, away from the page's rendering.
       runner = await createStageRunner(this.config.browserWorker !== false);
-      const stageRunner = runner;
+      let stageRunner = runner;
 
       /**
        * Runs the first stage that connects. If its socket cannot open within
@@ -384,7 +384,21 @@ export class SpeedTestEngine {
 
         if (this.tests.upload) {
           if (this.tests.download) {
-            await this.delay(500);
+            /*
+             * The download sockets sent CLOSE, but a browser can only close a WebSocket
+             * gracefully, and the CDN server (a Cloudflare Worker) cannot reset the connection:
+             * it closes cleanly and Cloudflare still delivers the frames it already queued. On
+             * slow links those frames kept the downlink busy and starved the upload's ACKs: at
+             * 1 Mbps the upload measured about 60% of the link. Terminating the stage worker
+             * that owns the download sockets drops them at once, like the native clients' hard
+             * close, so the upload runs in a new worker. Starting it overlaps the cooldown.
+             */
+            const restartWorker = async () => {
+              if (stageRunner.mode !== 'worker') return;
+              stageRunner.close();
+              runner = stageRunner = await createStageRunner(true);
+            };
+            await Promise.all([this.delay(500), restartWorker()]);
           }
 
           this.setStage('uploadEstimation');
