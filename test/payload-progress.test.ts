@@ -5,11 +5,10 @@ import {
   Opcode,
   TCP_PREAMBLE,
   computeAcceptKey,
-  encodeFrame,
   encodeFrameHeader,
 } from '@coveragemap/speed-transport';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { supportsPayloadProgress, trackBinaryPayload } from '../src/tests/payload-progress.js';
+import { supportsPayloadProgress } from '../src/tests/payload-progress.js';
 import { loadNodeWebSocket, loadTcpTransport, openSocket } from '../src/tests/sockets.js';
 import { openDownloadLane } from '../src/tests/throughput-lanes.js';
 import { hostWorkerLane, type HostToWorkerMessage, type LanePort } from '../src/tests/worker-lanes.js';
@@ -26,75 +25,6 @@ beforeAll(async () => {
 
 const MESSAGE_BYTES = 1024 * 1024;
 const FIRST_PART_BYTES = 300 * 1024;
-
-/** A parser like the sockets use, recording what it delivers. */
-function parserWithEvents() {
-  const events: string[] = [];
-  const parser = new FrameParser(
-    { requireMask: false, maxMessageBytes: 64 * 1024 * 1024, maxBufferedMessageBytes: 64 * 1024 },
-    {
-      onMessage: (data, binary) => events.push(`${binary ? 'binary' : 'text'} ${data.length}`),
-      onBulkMessage: (length, binary) => events.push(`${binary ? 'bulk' : 'bulk text'} ${length}`),
-      onPing: () => events.push('ping'),
-      onPong: () => {},
-      onClose: () => events.push('close'),
-      onError: (_code, reason) => events.push(`error ${reason}`),
-    }
-  );
-  const reports: number[] = [];
-  expect(trackBinaryPayload(parser, (bytes) => {
-    reports.push(bytes);
-    events.push(`+${bytes}`);
-  })).toBe(true);
-  return { parser, events, reports };
-}
-
-describe('trackBinaryPayload', () => {
-  it('reports a large binary message as it arrives, the rest before it is delivered', () => {
-    const { parser, events, reports } = parserWithEvents();
-    const payload = Buffer.alloc(MESSAGE_BYTES);
-    const frame = Buffer.concat([encodeFrameHeader(Opcode.Binary, MESSAGE_BYTES), payload]);
-    parser.push(frame.subarray(0, 4)); // part of the header
-    parser.push(frame.subarray(4, 10 + FIRST_PART_BYTES));
-    parser.push(frame.subarray(10 + FIRST_PART_BYTES, frame.length - 1));
-    expect(events).toEqual([`+${FIRST_PART_BYTES}`, `+${MESSAGE_BYTES - FIRST_PART_BYTES - 1}`]);
-    parser.push(frame.subarray(frame.length - 1));
-    expect(events.slice(2)).toEqual(['+1', `bulk ${MESSAGE_BYTES}`]);
-    expect(reports.reduce((a, b) => a + b, 0)).toBe(MESSAGE_BYTES);
-  });
-
-  it('reports small binary messages, never text, and splits chunks that span messages', () => {
-    const { parser, events, reports } = parserWithEvents();
-    const big = Buffer.concat([encodeFrameHeader(Opcode.Binary, 100_000), Buffer.alloc(100_000)]);
-    const chunk = Buffer.concat([
-      encodeFrame(Opcode.Text, Buffer.from('PONG')),
-      encodeFrame(Opcode.Binary, Buffer.alloc(1000)),
-      big.subarray(0, 50_010),
-    ]);
-    parser.push(chunk);
-    expect(events).toEqual(['text 4', '+1000', 'binary 1000', '+50000']);
-    parser.push(big.subarray(50_010));
-    expect(events.slice(4)).toEqual(['+50000', 'bulk 100000']);
-    expect(reports.reduce((a, b) => a + b, 0)).toBe(101_000);
-  });
-
-  it('follows fragmented messages across a control frame between their fragments', () => {
-    const { parser, events, reports } = parserWithEvents();
-    parser.push(Buffer.concat([encodeFrameHeader(Opcode.Binary, 70_000, false), Buffer.alloc(70_000)]));
-    parser.push(encodeFrame(Opcode.Ping));
-    const last = Buffer.concat([encodeFrameHeader(Opcode.Continuation, 30_000), Buffer.alloc(30_000)]);
-    parser.push(last.subarray(0, 4 + 10_000));
-    parser.push(last.subarray(4 + 10_000));
-    expect(events).toEqual(['+70000', 'ping', '+10000', '+20000', 'bulk 100000']);
-    expect(reports.reduce((a, b) => a + b, 0)).toBe(100_000);
-  });
-
-  it('leaves objects that are not a frame parser alone', () => {
-    const report = () => {};
-    expect(trackBinaryPayload(undefined, report)).toBe(false);
-    expect(trackBinaryPayload({ push() {} }, report)).toBe(false);
-  });
-});
 
 /**
  * A server that answers `START` with one 1 MiB binary message, sending its first 300 KiB at

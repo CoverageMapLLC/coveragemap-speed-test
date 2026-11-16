@@ -6,7 +6,7 @@ Results now follow the standard result format shared by every CoverageMap client
 
 ### Improvements
 
-- **Download bytes count as they arrive in Node.js**: Raw TCP sockets and the library's Node.js WebSocket client report each frame's bytes as they are read, so progress snapshots and the stage total also count the frames still arriving (1 to 5 MiB per socket), as the native libraries do, and the ramp-up exclusion starts from the first bytes to arrive. Before, only whole frames counted. The work is per socket read, not per byte: on loopback with 12 sockets on 6 threads, throughput and CPU per byte stayed within run-to-run variation (raw TCP about 22 Gbps, WebSocket about 33 to 35 Gbps). Browsers, and `config.nodeWebSocket: false`, still count whole frames: the WebSocket API only delivers whole messages.
+- **Download bytes count as they arrive in Node.js**: Raw TCP sockets and the library's Node.js WebSocket client report each frame's bytes as they are read, so progress snapshots and the stage total also count the frames still arriving (1 to 5 MiB per socket), as the native libraries do, and the ramp-up exclusion starts from the first bytes to arrive. Before, only whole frames counted. The work is per socket read, not per byte: on loopback with 12 sockets on 6 threads, throughput and CPU per byte stayed within run-to-run variation (raw TCP about 22 Gbps, WebSocket about 33 to 35 Gbps). Browsers, and `config.nodeWebSocket: false`, still count whole frames: the WebSocket API only delivers whole messages. The bytes come from speed-transport's public payload progress hook, so this needs `@coveragemap/speed-transport` 0.3.0 (now the minimum version).
 
 ### New Features
 

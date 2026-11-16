@@ -33,7 +33,6 @@ import {
   encodeFrameHeader,
   encodeMaskedFrame,
 } from '@coveragemap/speed-transport';
-import { trackBinaryPayload } from './payload-progress.js';
 
 export interface NodeWebSocketOptions {
   /** Fail if the connection and handshake have not completed by then. Defaults to 10 s. */
@@ -155,11 +154,8 @@ export class NodeWebSocket extends EventTarget {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   onclose: ((event: NodeWebSocketCloseEvent) => void) | null = null;
-  /**
-   * Binary message payload bytes as they arrive (see `PayloadProgressSocket`). Present only
-   * when the frame parser supports it; `declare` keeps it off sockets that do not.
-   */
-  declare onpayloadprogress?: ((bytes: number) => void) | null;
+  /** Binary message payload bytes as they arrive (see `PayloadProgressSocket`). */
+  onpayloadprogress: ((bytes: number) => void) | null = null;
 
   private readonly socket: net.Socket;
   private readonly parser: FrameParser;
@@ -192,12 +188,12 @@ export class NodeWebSocket extends EventTarget {
         onPong: () => {},
         onClose: (code, reason) => this.onPeerClose(code, reason),
         onError: (code, reason) => this.failConnection(code, reason),
+        // speed-transport reports a message's bytes once per read, before the message itself.
+        onPayloadProgress: (bytes, binary) => {
+          if (binary && this.readyState === NodeWebSocket.OPEN) this.onpayloadprogress?.(bytes);
+        },
       }
     );
-    const tracked = trackBinaryPayload(this.parser, (bytes) => {
-      if (this.readyState === NodeWebSocket.OPEN) this.onpayloadprogress?.(bytes);
-    });
-    if (tracked) this.onpayloadprogress = null;
 
     const readBuffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
     const onread = {
