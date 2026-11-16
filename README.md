@@ -132,7 +132,7 @@ const engine = new SpeedTestEngine({
 
 ## Data Upload
 
-Completed test results are uploaded to CoverageMap systems (`map.coveragemap.com`) for analysis, benchmarking, and network quality metrics.
+Test results, passed or failed, are uploaded to CoverageMap systems (`map.coveragemap.com`) for analysis, benchmarking, and network quality metrics. Cancelled runs are not uploaded.
 
 If an upload fails, results are queued locally and retried automatically in the background on the next run.
 

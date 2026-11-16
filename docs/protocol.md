@@ -283,12 +283,13 @@ Stage markers recorded in the result payload:
 | Stage(s) | Marker recorded |
 |---|---|
 | Before latency | `latencyStart` |
+| After latency | `latencyEnd` |
 | Before downloadEstimation | `downloadStart` |
 | After download | `downloadEnd` |
 | Before uploadEstimation | `uploadStart` |
 | After upload | `uploadEnd` |
 
-Each marker snapshot captures: timestamp, connection type, external IP, and location.
+Each marker snapshot captures: timestamp (ISO 8601 UTC), connection type, external IP, ISP, location, and network details. Markers are recorded only for enabled stages. An end marker is recorded whenever its phase ran and ended, whether it passed or failed: a failed download phase records `downloadStart` and `downloadEnd`, and `failedStage` says which phase failed. A cancelled run records no end marker for the phase it was cancelled in (it is not uploaded either).
 
 ---
 
@@ -332,6 +333,10 @@ From the raw list of RTT samples `latencies[]`:
 | `maxJitter` | Maximum consecutive difference |
 
 The downstream stages use `minLatency` and `minJitter` (the most optimistic estimates) for timing normalization, since those reflect the best achievable network conditions and give the most conservative throughput correction.
+
+#### When the latency stage is disabled
+
+With `tests.latency: false`, the later stages still need a latency to subtract. The first enabled download or upload phase therefore starts with one silent `PING` (after its `downloadStart` or `uploadStart` marker, like the native engine) and uses that round trip for normalization only. It is not reported: the result's `latency`, `jitter`, and `latenciesList` are `null`, `onLatencyPing` and `onLatencyResult` do not fire, and no `latencyStart`/`latencyEnd` markers are recorded. If that ping fails, the phase it belongs to fails.
 
 #### Timeouts and Defaults
 
@@ -459,6 +464,8 @@ on frame:     if outstanding = 0: ignore
               if outstanding <= 100 and the stage is running: request(min(lastKb × 3, 5120))
 ```
 
+**When bytes count.** In Node.js, raw TCP sockets and the [Node.js WebSocket client](#nodejs-websocket-client) report a frame's payload bytes as they arrive, once per socket read, and the lane counts them then (each byte once: the frame's message event adds nothing more). A snapshot or the end of the stage therefore also counts the frames still arriving, as in the native libraries. The browser WebSocket API only delivers whole messages, so in browsers (and with `config.nodeWebSocket: false`) a frame counts once it has fully arrived, and up to one frame per socket can be left out of a snapshot or the stage total.
+
 When the stage ends, the download sockets stop requesting more messages but stay open while the loaded latency monitor waits for its last `PONG` (at most 100 ms), so that ping still measures a loaded link; bytes that arrive then are not counted. Each download socket then sends the text command `CLOSE` before closing. The server ends the connection at once instead of first delivering every frame it has already queued, which on a slow link would otherwise occupy the downlink well into the next stage. Servers that do not know the command ignore it.
 
 #### Threads
@@ -470,6 +477,7 @@ A single JavaScript thread cannot receive or send TLS at 10 Gbps. When the estim
 In Node.js, `ws://` and `wss://` sockets come from the library's own client (`src/tests/node-websocket.ts`) instead of `globalThis.WebSocket`, so no polyfill is needed on any supported Node.js version. Node's built-in `WebSocket` masks every upload byte and copies every download byte in JavaScript, which held a thread to about half its TLS throughput. The client speaks standard WebSocket and differs only in what it does with the payload:
 
 - Download messages above 64 KiB are counted, not read: the frame parser skips their payload, and the message arrives as a zero-filled `ArrayBuffer` of the right length.
+- Download bytes are reported as they arrive (`onpayloadprogress`), once per read, so a frame still arriving counts toward snapshots and the stage total. Raw TCP sockets get the same from the library, which follows speed-transport's frame parser.
 - Upload chunks are zeros, so a masked chunk is the masking key repeated. Each chunk size is masked once with a random key and that frame is sent again and again. RFC 6455 asks for a fresh key per frame so that page scripts cannot choose the bytes intermediaries see; the payload here is always zeros chosen by the library. Commands get a fresh key per frame.
 
 Bun and Deno keep their native `WebSocket`. If the client cannot load, the global `WebSocket` is used as before.
@@ -505,7 +513,7 @@ after durationMs (from testStartTime, not from the first bytes):
 
 All sockets accumulate into a single `totalBytes` counter. The final speed is computed from the aggregate data across all connections. Speeds are rounded to 3 decimal places.
 
-The ramp-up at the start of a stage, while the connections speed up, is left out of `speedMbps`: it is measured from 250 ms after the first bytes are counted (the first binary frame for download, the first `ACK` for upload) to the stage's end. Everything after that point counts, so a ramp-up longer than the exclusion still lowers the speed, and the wait for the first byte is already excluded, so no latency bias is subtracted. Before that point, or when the stage ends before it, the speed is the whole stage's. Snapshots switch formula at the same point, so the final value continues the last progress values. Both the 250 ms exclusion and the 1 s loaded latency delay are fixed; applications cannot configure them. With worker threads, each worker tells the main thread once when its lane counts its first bytes, and the main thread does all the timing.
+The ramp-up at the start of a stage, while the connections speed up, is left out of `speedMbps`: it is measured from 250 ms after the first bytes are counted (the first download bytes to arrive, or the first whole binary frame where bytes count per frame; the first `ACK` for upload) to the stage's end. Everything after that point counts, so a ramp-up longer than the exclusion still lowers the speed, and the wait for the first byte is already excluded, so no latency bias is subtracted. Before that point, or when the stage ends before it, the speed is the whole stage's. Snapshots switch formula at the same point, so the final value continues the last progress values. Both the 250 ms exclusion and the 1 s loaded latency delay are fixed; applications cannot configure them. With worker threads, each worker tells the main thread once when its lane counts its first bytes, and the main thread does all the timing.
 
 #### Loaded Latency Monitor
 
@@ -757,9 +765,8 @@ When cancelled:
 
 When a stage throws an error (non-cancellation):
 
-1. `engine.callbacks.onError(error, stage)` fires.
-2. `failedReason` is set to `error.message`.
-3. `failedStage` is mapped from the engine stage name to the result stage marker:
+1. `failedReason` is set to `"<reason>: <message>"`, where `<reason>` is the error's failure reason (below) and `<message>` its message.
+2. `failedStage` is the start marker of the phase that failed:
 
 | Engine stage | `failedStage` recorded |
 |---|---|
@@ -767,7 +774,24 @@ When a stage throws an error (non-cancellation):
 | `downloadEstimation` or `download` | `"downloadStart"` |
 | `uploadEstimation` or `upload` | `"uploadStart"` |
 
-4. The engine continues to the result assembly step and uploads a partial result.
+   With the latency stage disabled, a failed latency normalization ping fails the phase it runs in (`downloadStart` or `uploadStart`).
+3. The failed phase's end marker (`latencyEnd`, `downloadEnd`, or `uploadEnd`) is recorded.
+4. `engine.callbacks.onError(error, stage)` fires.
+5. The engine continues to the result assembly step and uploads the partial result.
+
+Failure reasons are the native engine's `FailureReason` values, so failures from every CoverageMap client group the same way. Errors are tagged where they are created (`SpeedTestError.reason`), including across the browser Web Worker and Node.js worker threads:
+
+| Reason | When |
+|---|---|
+| `unreachable` | No transport the server offers can be used from this runtime |
+| `connectionFailed` | A connection was refused, could not be created, or dropped |
+| `connectionTimeout` | A connection did not open in time (the first connection's 3 s window, or a stage timeout before it connected) |
+| `transferTimeout` | A throughput stage did not move data |
+| `timeout` | A stage did not finish in time after it connected |
+| `protocolError` | The server answered with something the protocol does not allow |
+| `unknown` | Any other error |
+
+For example: `"connectionTimeout: Connection not open after 3000ms"`, `"connectionFailed: Download WebSocket connection 3 failed"`. A cancelled run has `failedReason: "Cancelled"`.
 
 Partial results (where a stage failed) still include all data that was collected up to the point of failure. For example, if download succeeds but upload fails, the result contains valid `downloadSpeed` and `latency` but `uploadSpeed: null`.
 
@@ -777,7 +801,7 @@ The `testStatus` field is `"passed"` when `failedStage` is null, and `"failed"` 
 
 ## Phase 3: Result Upload
 
-On successful test completion, the engine uploads the assembled result to:
+When a run ends, passed or failed, the engine uploads the assembled result to:
 
 ```
 POST https://map.coveragemap.com/api/v1/speedTests
@@ -788,7 +812,7 @@ Content-Type: application/json
 
 The body is a JSON array (batch format), containing a single result per standard test run.
 
-This upload is fire-and-forget from the engine's perspective — it does not block the resolved `run()` promise.
+A failed run is uploaded too, with `failedStage` and `failedReason`. A cancelled run is not uploaded. This upload is fire-and-forget from the engine's perspective — it does not block the resolved `run()` promise.
 
 ### Upload Queue Fallback
 
@@ -798,11 +822,11 @@ If the upload POST fails (network error, server unavailable, etc.), the result i
 coveragemap-test-results-queue → JSON array of NetworkTestResultTestResults
 ```
 
-On the **next call** to `engine.run()`, the engine attempts to flush the queue before the new test begins:
+On the **next call** to `engine.run()`, the engine retries the queue in the background, alongside the new test; it does not wait for the retry:
 
 ```
 engine.run() called
-  → flushUploadQueue()  // retry any previously failed uploads
+  → flushUploadQueue()  // started, not awaited: retries previously failed uploads
   → ... run test stages ...
   → uploadResults(newResult)
 ```

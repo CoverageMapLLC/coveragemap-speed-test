@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+Results now follow the standard result format shared by every CoverageMap client (the Android and iOS libraries, the CoverageMap app, and the Core API). Every new field is nullable and `version` stays `1`, so payloads from earlier versions stay valid.
+
+### Improvements
+
+- **Download bytes count as they arrive in Node.js**: Raw TCP sockets and the library's Node.js WebSocket client report each frame's bytes as they are read, so progress snapshots and the stage total also count the frames still arriving (1 to 5 MiB per socket), as the native libraries do, and the ramp-up exclusion starts from the first bytes to arrive. Before, only whole frames counted. The work is per socket read, not per byte: on loopback with 12 sockets on 6 threads, throughput and CPU per byte stayed within run-to-run variation (raw TCP about 22 Gbps, WebSocket about 33 to 35 Gbps). Browsers, and `config.nodeWebSocket: false`, still count whole frames: the WebSocket API only delivers whole messages.
+
+### New Features
+
+- **`estimatedDownloadSpeed` and `estimatedUploadSpeed`** in `results.measurements`: the Mbps measured by each estimation stage, rounded to 3 decimals, `null` when estimation did not complete.
+- **`requestedDownloadConnectionCount`, `establishedDownloadConnectionCount`, `requestedUploadConnectionCount`, `establishedUploadConnectionCount`** in `testType`: the connections each throughput stage asked for and the ones that opened. A stage only starts once every connection is open, so the two are equal for a stage that completed; established is `null` for one that did not.
+- **`latencyEnd` stage marker** after the latency stage, and the failing phase now records its end marker too (`latencyEnd`, `downloadEnd`, or `uploadEnd`), not only `failedStage`. A cancelled run records none.
+- **`SpeedTestError`, `getFailureReason`, `formatFailedReason`, and the `SpeedTestFailureReason` type** are exported. Errors the stages raise, and pass to `onError`, carry a `reason`.
+
+### Breaking Changes
+
+- **Defaults: 15 pings and 7 s stages**: `pingCount` is 15 (was 10) and `downloadDurationMs` / `uploadDurationMs` are 7000 (were 10000), the same as the CoverageMap app and native libraries. Pass the old values in `config` to keep them.
+- **`failedReason` is `"<reason>: <message>"`** (or `"Cancelled"`), where `<reason>` is one of `unreachable`, `connectionFailed`, `connectionTimeout`, `transferTimeout`, `timeout`, `protocolError`, `unknown`, the native engine's failure reasons. It was the bare error message.
+- **`downloadConnectionCount` / `uploadConnectionCount`** are now the established count, `null` when the throughput stage did not complete (they were set once estimation finished).
+- **With the latency stage disabled, `latency`, `jitter`, and `latenciesList` are `null`**, and `onComplete` receives `null` latency data. The single ping that still runs to normalize the later stages' timing now runs inside the first download or upload phase, after its start marker, and is no longer reported as the result's latency.
+
+### Bug Fixes
+
+- With the latency stage disabled, a failed latency normalization ping on an engine that had already run a test was reported with `failedStage: null` and `testStatus: "passed"`. It now fails the phase it runs in.
+
 ## 0.6.0
 
 ### Improvements

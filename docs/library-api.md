@@ -68,6 +68,7 @@ import { SpeedTestEngine } from '@coveragemap/speed-test';
 - [Utilities](#utilities)
   - [CancellationToken](#cancellationtoken)
   - [CancellationError](#cancellationerror)
+  - [SpeedTestError](#speedtesterror)
   - [calculateSpeedMbps](#calculatespeedmbps)
   - [formatSpeed](#formatspeed)
   - [formatBytes](#formatbytes)
@@ -192,7 +193,7 @@ Executes the enabled test stages in sequence and returns an assembled result pay
 
 When `server` is a UUID string, the engine resolves it against the server list (using the cache when available) and throws if no server with that ID is found. When `server` is omitted, the engine selects the first result returned by `getServers()`.
 
-When each stage completes, the corresponding callback is fired. The returned payload is also asynchronously uploaded to CoverageMap; if upload fails, the payload is queued locally and flushed automatically at the start of the next `run()` call.
+When each stage completes, the corresponding callback is fired. The returned payload is also asynchronously uploaded to CoverageMap; if upload fails, the payload is queued locally and retried in the background, alongside the test, when the next `run()` starts. Failed runs are uploaded too; cancelled runs are not.
 
 Returns a `NetworkTestResultTestResults` payload for both successful and stage-failed runs. Throws only for unrecoverable precondition errors (e.g. server ID not found, no servers available).
 
@@ -404,7 +405,7 @@ interface SpeedTestSelection {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `latency` | `boolean` | `true` | Enables the RTT/jitter latency stage. When disabled with `download` or `upload` enabled, throughput stages run without latency normalization. |
+| `latency` | `boolean` | `true` | Enables the latency stage. When it is disabled, the first download or upload phase still sends one silent `PING` to measure the latency its timing subtracts, but that ping is not reported: the result's `latency`, `jitter`, and `latenciesList` are `null` and `onComplete` receives `null` latency data. |
 | `download` | `boolean` | `true` | Enables the download estimation and sustained download throughput stages. |
 | `upload` | `boolean` | `true` | Enables the upload estimation and sustained upload throughput stages. |
 
@@ -446,8 +447,8 @@ interface SpeedTestCallbacks {
 | `onDownloadResult` | `data: SpeedTestData` | Fired once when the sustained download stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
 | `onUploadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained upload stage. |
 | `onUploadResult` | `data: SpeedTestData` | Fired once when the sustained upload stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
-| `onComplete` | `latencyData, downloadData, uploadData, result` | Fired after the run assembles final measurements. The first three arguments are the aggregated stage results (`null` if that stage was not run). `result` is the complete `NetworkTestResultTestResults` payload — the same object returned by `run()`. A copy is uploaded to CoverageMap before this callback runs, so changing `result` doesn't change the upload. |
-| `onError` | `error: Error, stage: SpeedTestStage` | Fired for non-cancellation stage failures. Cancellation does not emit this. |
+| `onComplete` | `latencyData, downloadData, uploadData, result` | Fired after the run assembles final measurements. The first three arguments are the aggregated stage results (`null` if that stage was not run or did not complete). `result` is the complete `NetworkTestResultTestResults` payload — the same object returned by `run()`. A copy is uploaded to CoverageMap before this callback runs, so changing `result` doesn't change the upload. |
+| `onError` | `error: Error, stage: SpeedTestStage` | Fired for non-cancellation stage failures. Cancellation does not emit this. Errors the library raises carry a `reason` (`SpeedTestFailureReason`, see [`SpeedTestError`](#speedtesterror)). |
 
 ---
 
@@ -942,7 +943,7 @@ interface SpeedTestData {
 
 ## Result payload
 
-The complete payload produced by `run()` and uploaded to CoverageMap.
+The complete payload produced by `run()` and uploaded to CoverageMap. The definitions live in [`src/types/test-results.ts`](../src/types/test-results.ts); [Result schema](./result-schema.md) explains how each field is measured and when it is `null`.
 
 ### NetworkTestResultTestResults
 
@@ -950,6 +951,7 @@ Top-level container for a single test run.
 
 ```ts
 interface NetworkTestResultTestResults {
+  source: 'external';
   version: number;
   device: NetworkTestResultDevice;
   testType: NetworkTestResultTestType;
@@ -960,11 +962,12 @@ interface NetworkTestResultTestResults {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `version` | `number` | Payload schema version. |
+| `source` | `'external'` | Always `'external'`: the result comes from an application built on this library (or the native engine's external format). CoverageMap's own app sends no `source`. |
+| `version` | `number` | Payload schema version, currently `1`. New fields are added without changing it. |
 | `device` | `NetworkTestResultDevice` | Device and application metadata at the time of the test. |
-| `testType` | `NetworkTestResultTestType` | Test session configuration and sizing parameters. |
-| `results` | `NetworkTestResultResults` | All measurement outcomes and connection context. |
-| `stages` | `NetworkTestResultStage[] \| null` | Per-stage timing records, or `null` if not collected. |
+| `testType` | `NetworkTestResultTestType` | Which stages ran and how they were sized. |
+| `results` | `NetworkTestResultResults` | Measurements and network context. |
+| `stages` | `NetworkTestResultStage[] \| null` | Stage markers, in order. |
 
 ---
 
@@ -974,49 +977,56 @@ Device, browser, OS, and application metadata.
 
 ```ts
 interface NetworkTestResultDevice {
-  id: string;
-  nameId: string;
-  appName: string;
-  appVersion: string;
-  manufacturer: string | null;
-  name: string | null;
-  os: DeviceOS | null;
-  osVersion: string | null;
-  isMobile: boolean;
+  id: string | null;
+  manufacturer: string;
+  nameId: string | null;
+  name: string;
+  os: DeviceOS;
+  osVersion: string;
+  appName: string | null;
+  appVersion: string | null;
   application: NetworkTestResultApplicationInfo;
-  coreSystem: NetworkTestResultCoreSystemInfo;
-  // browser fields
+
   browserName: string | null;
   browserVersion: string | null;
   browserEngine: string | null;
-  // hardware/environment
+  browserEngineVersion: string | null;
+
+  cpuArchitecture: string | null;
   cpuCores: number | null;
   deviceMemoryGb: number | null;
+  deviceType: string | null;
+  deviceVendor: string | null;
+  deviceModel: string | null;
+  isMobile: boolean;
+
   language: string | null;
   timezone: string | null;
+  coreSystem: NetworkTestResultCoreSystemInfo | null;
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | `string` | Persistent device identifier (UUID, stored in local storage by default). |
-| `nameId` | `string` | Human-readable device name identifier. |
-| `appName` | `string` | From `application.name`. |
-| `appVersion` | `string` | From `application.version`. |
-| `manufacturer` | `string \| null` | Device manufacturer. |
-| `name` | `string \| null` | Device model name. |
-| `os` | `DeviceOS \| null` | Operating system. |
-| `osVersion` | `string \| null` | OS version string. |
-| `isMobile` | `boolean` | Whether the device is classified as mobile. |
-| `application` | `NetworkTestResultApplicationInfo` | Full application metadata from constructor options. |
-| `coreSystem` | `NetworkTestResultCoreSystemInfo` | Host-level runtime telemetry. |
-| `browserName` | `string \| null` | Browser name (browser runtimes). |
-| `browserVersion` | `string \| null` | Browser version. |
-| `browserEngine` | `string \| null` | Browser engine (e.g. `Blink`, `WebKit`). |
+| `id` | `string \| null` | Persistent device identifier (UUID, stored in local storage by default). |
+| `manufacturer` | `string` | Device manufacturer. |
+| `nameId` | `string \| null` | Machine-readable device name identifier. |
+| `name` | `string` | Human-readable device name. |
+| `os` | `DeviceOS` | Operating system. |
+| `osVersion` | `string` | OS version string. |
+| `appName` | `string \| null` | From `application.name`. |
+| `appVersion` | `string \| null` | From `application.version`. |
+| `application` | `NetworkTestResultApplicationInfo` | Application metadata from the constructor options. |
+| `browserName`, `browserVersion` | `string \| null` | Browser name and version (browser runtimes). |
+| `browserEngine`, `browserEngineVersion` | `string \| null` | Browser engine (e.g. `Blink`, `WebKit`) and its version. |
+| `cpuArchitecture` | `string \| null` | CPU architecture. |
 | `cpuCores` | `number \| null` | Logical CPU core count. |
 | `deviceMemoryGb` | `number \| null` | Device memory reported by the browser. |
-| `language` | `string \| null` | Navigator language string. |
+| `deviceType`, `deviceVendor`, `deviceModel` | `string \| null` | Device classification from the user agent or the device metadata provider. |
+| `isMobile` | `boolean` | Whether the device is classified as mobile. |
+| `language` | `string \| null` | Language string. |
 | `timezone` | `string \| null` | IANA timezone string. |
+| `coreSystem` | `NetworkTestResultCoreSystemInfo \| null` | Host-level runtime telemetry; `null` where it is not collected. |
 
 ---
 
@@ -1056,7 +1066,7 @@ interface NetworkTestResultCoreSystemInfo {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `runtime` | `RuntimeType` | Runtime environment (e.g. `'browser'`, `'node'`). |
+| `runtime` | `RuntimeType` | Runtime environment: `'browser'`, `'node'`, or `'unknown'`. |
 | `hostName` | `string \| null` | Machine hostname. |
 | `processId` | `number \| null` | OS process identifier. |
 | `platform` | `string \| null` | OS platform label. |
@@ -1069,79 +1079,85 @@ interface NetworkTestResultCoreSystemInfo {
 
 ### NetworkTestResultTestType
 
-Session configuration and protocol sizing parameters recorded at run time.
+Which stages ran and how they were sized.
 
 ```ts
+interface NetworkTestResultTestsRun {
+  latency: boolean;
+  download: boolean;
+  upload: boolean;
+}
+
 interface NetworkTestResultTestType {
   id: string;
   sessionId: string;
   type: TestTypeSingleMultiple;
-  tag: LocationTag;
-  testProtocol: string;
   testIndex: number | null;
   testCount: number | null;
-  downloadDurationMs: number | null;
-  uploadDurationMs: number | null;
+  tag: LocationTag;
+  testsRun: NetworkTestResultTestsRun;
+  downloadTestDuration: number | null;
+  uploadTestDuration: number | null;
+  testProtocol: string;
   downloadConnectionCount: number | null;
   uploadConnectionCount: number | null;
-  downloadPacketSizeKb: number | null;
-  uploadPacketSizeKb: number | null;
+  requestedDownloadConnectionCount: number | null;
+  establishedDownloadConnectionCount: number | null;
+  requestedUploadConnectionCount: number | null;
+  establishedUploadConnectionCount: number | null;
+  downloadPacketSize: number | null;
+  uploadPacketSize: number | null;
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | `string` | Unique test run identifier. |
-| `sessionId` | `string` | Session identifier grouping related runs. |
-| `type` | `TestTypeSingleMultiple` | Whether this is a single or multi-connection test. |
-| `tag` | `LocationTag` | Location context tag. |
+| `sessionId` | `string` | Identifier of the engine instance, shared by its runs. |
+| `type` | `TestTypeSingleMultiple` | Always `'single'` for the library. |
+| `testIndex`, `testCount` | `number \| null` | Position in a sequence of runs: `0` and `1` for the library. |
+| `tag` | `LocationTag` | Location context tag: `'other'` for the library. |
+| `testsRun` | `NetworkTestResultTestsRun` | The stages that were enabled (`SpeedTestSelection`). |
+| `downloadTestDuration`, `uploadTestDuration` | `number \| null` | Configured stage duration in ms; `null` when the stage was not enabled. |
 | `testProtocol` | `string` | Transport used: `'TCP'` for raw TCP, `'WS'` for WebSocket, `'WSS'` for secure WebSocket. |
-| `testIndex` | `number \| null` | Index within a sequence of runs. |
-| `testCount` | `number \| null` | Total number of runs in the sequence. |
-| `downloadDurationMs` | `number \| null` | Configured download duration. |
-| `uploadDurationMs` | `number \| null` | Configured upload duration. |
-| `downloadConnectionCount` | `number \| null` | Number of parallel download connections used. |
-| `uploadConnectionCount` | `number \| null` | Number of parallel upload connections used. |
-| `downloadPacketSizeKb` | `number \| null` | Download message size in KB. |
-| `uploadPacketSizeKb` | `number \| null` | Upload message size in KB. |
+| `downloadConnectionCount`, `uploadConnectionCount` | `number \| null` | Connections that carried the throughput stage (the established count). `null` when the stage did not complete. |
+| `requestedDownloadConnectionCount`, `requestedUploadConnectionCount` | `number \| null` | Connections the throughput stage asked for, from the estimate (1, 2, 4, 6, 8, or 12). `null` when estimation did not complete. |
+| `establishedDownloadConnectionCount`, `establishedUploadConnectionCount` | `number \| null` | Connections that opened. A throughput stage starts only once every connection is open, so this equals the requested count; `null` when the stage did not complete. |
+| `downloadPacketSize`, `uploadPacketSize` | `number \| null` | Throughput stage message (download) or chunk (upload) size in KiB; `null` when estimation did not complete. |
 
 ---
 
 ### NetworkTestResultResults
 
-All measurement outcomes and network context.
+Measurements and network context.
 
 ```ts
 interface NetworkTestResultResults {
   dateTime: string;
+  connectionType: string | null;
+  externalIpAddress: string | null;
+  ispName: string | null;
   testStatus: TestStatus;
-  connectionType: ConnectionType | null;
-  clientIp: string | null;
-  serverIp: string | null;
-  isVpn: boolean | null;
   location: NetworkTestResultLocation | null;
-  serverId: string | null;
-  serverDomain: string | null;
+  server: SpeedTestServer | null;
+  cellular: NetworkTestResultCellularInfo | null;
   wifi: NetworkTestResultWiFiInfo | null;
   wired: NetworkTestResultWiredInfo | null;
-  measurements: NetworkTestResultMeasurements | null;
+  measurements: NetworkTestResultMeasurements;
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `dateTime` | `string` | ISO 8601 timestamp when the test completed. |
-| `testStatus` | `TestStatus` | Overall test outcome (`'complete'`, `'failed'`, `'cancelled'`, etc.). |
-| `connectionType` | `ConnectionType \| null` | Detected connection type (e.g. `'wifi'`, `'mobile'`, `'wired'`). |
-| `clientIp` | `string \| null` | Client IP address at test time. |
-| `serverIp` | `string \| null` | Speed server IP address. |
-| `isVpn` | `boolean \| null` | VPN detection result when available. |
-| `location` | `NetworkTestResultLocation \| null` | Client geographic coordinates, when provided. |
-| `serverId` | `string \| null` | Identifier of the server tested against. |
-| `serverDomain` | `string \| null` | Domain of the server tested against. |
-| `wifi` | `NetworkTestResultWiFiInfo \| null` | Present when connection type is Wi-Fi. Contains ISP name. |
-| `wired` | `NetworkTestResultWiredInfo \| null` | Present when connection type is not Wi-Fi. Contains ISP name. |
-| `measurements` | `NetworkTestResultMeasurements \| null` | Final numeric measurements. |
+| `dateTime` | `string` | ISO 8601 UTC timestamp (`Z`) when the result was assembled, at the end of the run. |
+| `connectionType` | `string \| null` | Connection type (`ConnectionType` values) from the network provider. |
+| `externalIpAddress` | `string \| null` | Client public IP address from the connection lookup. |
+| `ispName` | `string \| null` | ISP or AS organization of the client (`connectionInfo.client.asOrg`). |
+| `testStatus` | `TestStatus` | `'passed'`, or `'failed'` when a stage failed or the run was cancelled. |
+| `location` | `NetworkTestResultLocation \| null` | Client location at the last stage marker. |
+| `server` | `SpeedTestServer \| null` | The server tested against, as listed or supplied. |
+| `cellular`, `wifi`, `wired` | see below | Network details for the active connection type, `null` otherwise. |
+| `measurements` | `NetworkTestResultMeasurements` | The measured values. |
 
 ---
 
@@ -1153,10 +1169,10 @@ Client geographic coordinates.
 interface NetworkTestResultLocation {
   latitude: number;
   longitude: number;
-  locationType: LocationType;
   elevation: number | null;
   heading: number | null;
   speed: number | null;
+  locationType: LocationType;
 }
 ```
 
@@ -1164,60 +1180,81 @@ interface NetworkTestResultLocation {
 |-------|------|-------------|
 | `latitude` | `number` | Geographic latitude. |
 | `longitude` | `number` | Geographic longitude. |
-| `locationType` | `LocationType` | How coordinates were determined (e.g. `'gps'`, `'ip'`). |
 | `elevation` | `number \| null` | Elevation in meters. |
 | `heading` | `number \| null` | Compass heading in degrees. |
 | `speed` | `number \| null` | Movement speed in m/s. |
+| `locationType` | `LocationType` | `'device'` when the location provider supplied it, `'ip'` when it came from the connection lookup. |
+
+---
+
+### NetworkTestResultCellularInfo
+
+Present when the connection type is `mobile`, or when a network provider supplies it.
+
+```ts
+interface NetworkTestResultCellularInfo {
+  technology: string | null;
+  mccCode: string | null;
+  mncCode: string | null;
+  countryIso: string | null;
+  carrierName: string | null;
+  provider: string | null;
+  isRoaming: boolean | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  rssi: number | null;
+  sinr: number | null;
+  primaryBand: NetworkTestResultBandInfo | null;
+  secondaryBands: NetworkTestResultBandInfo[] | null;
+}
+```
 
 ---
 
 ### NetworkTestResultMeasurements
 
-Final numeric results from all enabled stages.
+The measured values of every enabled stage.
 
 ```ts
 interface NetworkTestResultMeasurements {
-  downloadMbps: number | null;
-  uploadMbps: number | null;
-  latencyMs: number | null;
-  jitterMs: number | null;
+  dateTime: string | null;
+  estimatedDownloadSpeed: number | null;
+  estimatedUploadSpeed: number | null;
+  downloadSpeed: number | null;
+  totalDownload: number | null;
+  uploadSpeed: number | null;
+  totalUpload: number | null;
+  latency: number | null;
+  jitter: number | null;
   latenciesList: number[] | null;
   loadedDownloadLatencies: number[] | null;
   loadedUploadLatencies: number[] | null;
-  downloadBytes: number | null;
-  uploadBytes: number | null;
-  downloadDurationMs: number | null;
-  uploadDurationMs: number | null;
-  downloadSnapshots: NetworkTestResultSpeedTimePair[] | null;
-  uploadSnapshots: NetworkTestResultSpeedTimePair[] | null;
-  failedStage: TestStage | null;
+  downloadList: NetworkTestResultSpeedTimePair[] | null;
+  uploadList: NetworkTestResultSpeedTimePair[] | null;
   failedReason: string | null;
+  failedStage: TestStage | null;
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `downloadMbps` | `number \| null` | Final download throughput. |
-| `uploadMbps` | `number \| null` | Final upload throughput. |
-| `latencyMs` | `number \| null` | Median RTT from the pre-test latency stage. |
-| `jitterMs` | `number \| null` | Median jitter from the pre-test latency stage. |
-| `latenciesList` | `number[] \| null` | Individual RTT samples from the pre-test latency stage. |
-| `loadedDownloadLatencies` | `number[] \| null` | Individual RTT samples collected by the loaded latency monitor during the download stage. `null` if the download stage was skipped or no pings completed. |
-| `loadedUploadLatencies` | `number[] \| null` | Individual RTT samples collected by the loaded latency monitor during the upload stage. `null` if the upload stage was skipped or no pings completed. |
-| `downloadBytes` | `number \| null` | Total download bytes transferred. |
-| `uploadBytes` | `number \| null` | Total upload bytes transferred. |
-| `downloadDurationMs` | `number \| null` | Actual download stage duration. |
-| `uploadDurationMs` | `number \| null` | Actual upload stage duration. |
-| `downloadSnapshots` | `NetworkTestResultSpeedTimePair[] \| null` | Time-series download samples. |
-| `uploadSnapshots` | `NetworkTestResultSpeedTimePair[] \| null` | Time-series upload samples. |
-| `failedStage` | `TestStage \| null` | Stage that failed, if any. |
-| `failedReason` | `string \| null` | Error message if a stage failed. |
+| `dateTime` | `string \| null` | ISO 8601 UTC timestamp (`Z`) when the test started. |
+| `estimatedDownloadSpeed`, `estimatedUploadSpeed` | `number \| null` | Mbps measured by the estimation stage, which sizes the throughput stage. Rounded to 3 decimals; `null` when estimation did not complete. |
+| `downloadSpeed`, `uploadSpeed` | `number \| null` | Throughput stage speed in Mbps, measured from 250 ms after the stage's first counted bytes to its end. |
+| `totalDownload`, `totalUpload` | `number \| null` | Bytes of the whole throughput stage, ramp-up included. |
+| `latency` | `number \| null` | **Minimum** round trip of the latency stage, in ms. `null` when the latency stage was not enabled. |
+| `jitter` | `number \| null` | **Median** difference between consecutive round trips of the latency stage, in ms. `null` when the latency stage was not enabled. |
+| `latenciesList` | `number[] \| null` | Every round trip of the latency stage. `null` when the latency stage was not enabled. |
+| `loadedDownloadLatencies`, `loadedUploadLatencies` | `number[] \| null` | Round trips measured during each throughput stage, from 1 s after its first counted bytes. `null` if the stage did not run or no ping completed. |
+| `downloadList`, `uploadList` | `NetworkTestResultSpeedTimePair[] \| null` | Progress snapshots of each throughput stage. |
+| `failedReason` | `string \| null` | `"<reason>: <message>"` when a stage failed, `"Cancelled"` when the run was cancelled. See [Result schema](./result-schema.md#failedreason). |
+| `failedStage` | `TestStage \| null` | Start marker of the phase that failed: `'latencyStart'`, `'downloadStart'`, or `'uploadStart'`. |
 
 ---
 
 ### NetworkTestResultSpeedTimePair
 
-A single time-stamped throughput sample in the result payload.
+A single progress snapshot in the result payload.
 
 ```ts
 interface NetworkTestResultSpeedTimePair {
@@ -1229,65 +1266,88 @@ interface NetworkTestResultSpeedTimePair {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `time` | `number` | Elapsed milliseconds since stage start. |
-| `speed` | `number` | Throughput in Mbps at this moment. |
-| `data` | `number` | Cumulative bytes at this moment. |
+| `time` | `number` | Milliseconds since the throughput stage started, rounded. |
+| `speed` | `number` | Speed in Mbps at this moment, by the same rule as the final speed. |
+| `data` | `number` | Bytes counted so far in the stage. |
 
 ---
 
 ### NetworkTestResultStage
 
-Per-stage timing record.
+A stage marker: when a phase started or ended, with the network context at that moment.
 
 ```ts
 interface NetworkTestResultStage {
   testStage: string;
   dateTime: string;
-  durationMs: number | null;
-  status: string | null;
-  failedReason: string | null;
+  connectionType: string | null;
+  externalIpAddress: string | null;
+  ispName: string | null;
+  location: NetworkTestResultLocation | null;
+  cellular: NetworkTestResultCellularInfo | null;
+  wifi: NetworkTestResultWiFiInfo | null;
+  wired: NetworkTestResultWiredInfo | null;
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `testStage` | `string` | Stage name. |
-| `dateTime` | `string` | ISO 8601 timestamp when the stage started. |
-| `durationMs` | `number \| null` | Stage duration in milliseconds. |
-| `status` | `string \| null` | Stage completion status. |
-| `failedReason` | `string \| null` | Error message if the stage failed. |
+| `testStage` | `string` | A `TestStage` value: `latencyStart`, `latencyEnd`, `downloadStart`, `downloadEnd`, `uploadStart`, `uploadEnd`. |
+| `dateTime` | `string` | ISO 8601 UTC timestamp (`Z`) of the marker. |
+| `connectionType`, `externalIpAddress`, `ispName` | `string \| null` | Network context at the marker. |
+| `location` | `NetworkTestResultLocation \| null` | Location at the marker. |
+| `cellular`, `wifi`, `wired` | see below | Network details at the marker. |
+
+---
+
+### NetworkTestResultBandInfo
+
+A cellular band.
+
+```ts
+interface NetworkTestResultBandInfo {
+  bandNumber: number;
+  bandwidth: number;
+  technology: string | null;
+}
+```
 
 ---
 
 ### NetworkTestResultWiFiInfo
 
-Present when the detected connection type is Wi-Fi.
+Present when the connection type is `wifi`, or when a network provider supplies it.
 
 ```ts
 interface NetworkTestResultWiFiInfo {
+  ssidName: string | null;
+  bssid: string | null;
   ispName: string | null;
+  wifiStandard: string | null;
+  txRate: number | null;
+  rxRate: number | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  rssi: number | null;
+  sinr: number | null;
+  noise: number | null;
+  channelNumber: number | null;
 }
 ```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `ispName` | `string \| null` | ISP or AS organization name from connection info. |
 
 ---
 
 ### NetworkTestResultWiredInfo
 
-Present when the detected connection type is not Wi-Fi (wired, cellular, or unknown).
+Present when the connection type is `wired`, or when a network provider supplies it.
 
 ```ts
 interface NetworkTestResultWiredInfo {
   ispName: string | null;
+  macAddress: string | null;
+  dataLink: number | null;
 }
 ```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `ispName` | `string \| null` | ISP or AS organization name from connection info. |
 
 ---
 
@@ -1317,23 +1377,38 @@ interface BrowserInfo {
 ### Type aliases
 
 ```ts
-type DeviceOS = 'iOS' | 'Android' | 'Windows' | 'macOS' | 'Linux' | 'ChromeOS' | 'Other' | string;
+type DeviceOS = 'iOS' | 'android' | 'iPadOS' | 'windows' | 'mac' | 'linux' | 'chromeos' | 'web';
 
-type TestStatus = 'complete' | 'failed' | 'cancelled' | 'partial';
+type TestStatus = 'passed' | 'failed';
 
 type TestTypeSingleMultiple = 'single' | 'multiple';
 
-type LocationTag = 'client' | 'server' | 'unknown';
+type LocationTag = 'indoor' | 'outdoor' | 'driving' | 'other';
 
-type LocationType = 'gps' | 'ip' | 'manual' | 'unknown';
+type LocationType = 'device' | 'ip';
 
-type TestStage = 'latency' | 'download' | 'upload';
+type TestStage =
+  | 'latencyStart'
+  | 'latencyEnd'
+  | 'downloadStart'
+  | 'downloadEnd'
+  | 'uploadStart'
+  | 'uploadEnd';
 
 type ConnectionType = 'wifi' | 'mobile' | 'wired' | 'bluetooth' | 'none' | 'unknown';
 
-type RuntimeType = 'browser' | 'node' | 'bun' | 'deno' | 'worker' | 'other';
+type RuntimeType = 'browser' | 'node' | 'unknown';
 
 type ApplicationType = 'web' | 'backend' | 'mobile' | 'desktop' | 'cli' | 'serverless' | 'other';
+
+type SpeedTestFailureReason =
+  | 'unreachable'
+  | 'connectionFailed'
+  | 'connectionTimeout'
+  | 'transferTimeout'
+  | 'timeout'
+  | 'protocolError'
+  | 'unknown';
 ```
 
 ---
@@ -1460,6 +1535,36 @@ import { CancellationError } from '@coveragemap/speed-test';
 ```
 
 Extends `Error`. Use `instanceof CancellationError` to distinguish cooperative cancellation from other failures.
+
+---
+
+### SpeedTestError
+
+An error tagged with why the test failed. The stages raise it (or `SocketConnectError`, which extends it) and `onError` receives it; the result's `failedReason` is built from it with `formatFailedReason`.
+
+```ts
+import { SpeedTestError, getFailureReason, formatFailedReason } from '@coveragemap/speed-test';
+
+class SpeedTestError extends Error {
+  readonly reason: SpeedTestFailureReason;
+  constructor(reason: SpeedTestFailureReason, message: string);
+}
+
+getFailureReason(error: unknown): SpeedTestFailureReason; // error.reason, or 'unknown'
+formatFailedReason(error: unknown): string; // "<reason>: <message>"
+```
+
+| Reason | Meaning |
+|--------|---------|
+| `unreachable` | No transport the server offers can be used from this runtime. |
+| `connectionFailed` | A connection was refused, could not be created, or dropped. |
+| `connectionTimeout` | A connection did not open in time. |
+| `transferTimeout` | A throughput stage did not move data. |
+| `timeout` | A stage did not finish in time after it connected. |
+| `protocolError` | The server answered with something the protocol does not allow. |
+| `unknown` | Anything else. |
+
+The reasons are the native engine's `FailureReason` values, so failures from every CoverageMap client group the same way.
 
 ---
 
