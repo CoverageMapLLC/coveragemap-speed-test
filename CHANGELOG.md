@@ -48,8 +48,6 @@ Results now follow the standard result format shared by every CoverageMap client
 
 ### Bug Fixes
 
-- **Upload after download on slow links against the CDN, in browsers**: The CDN server cannot reset a connection on `CLOSE`, so Cloudflare kept delivering the download frames it had queued, and a browser could only close those sockets gracefully. On a 1 Mbps link the upload stage then measured about 60% of the link (three runs: 40 to 73%), while an upload on its own measured 91%. The engine now runs the upload phase in a new stage worker and terminates the one that ran the download, which drops its sockets at once. The upload after a download now measures the same as on its own (0.90 to 0.92 Mbps, against 0.91 to 0.93). Against the Node.js servers, which reset the connection, nothing changes.
-
 - The Node.js WebSocket client reports dropped connections as errors so latency fails fast and download estimation can reconnect, instead of waiting out the stage timeout.
 
 ## 0.5.0
@@ -63,8 +61,6 @@ Results now follow the standard result format shared by every CoverageMap client
 - **Slow links**: Download sockets send `CLOSE` when the stage ends, so leftover download frames no longer starve the upload stage. On 100 kbps to 1 Mbps links upload went from 0 to 7 kbps (or a timeout) to 95 to 99% of the link.
 
 ### Bug Fixes
-
-- **Upload after download on slow links against the CDN, in browsers**: The CDN server cannot reset a connection on `CLOSE`, so Cloudflare kept delivering the download frames it had queued, and a browser could only close those sockets gracefully. On a 1 Mbps link the upload stage then measured about 60% of the link (three runs: 40 to 73%), while an upload on its own measured 91%. The engine now runs the upload phase in a new stage worker and terminates the one that ran the download, which drops its sockets at once. The upload after a download now measures the same as on its own (0.90 to 0.92 Mbps, against 0.91 to 0.93). Against the Node.js servers, which reset the connection, nothing changes.
 
 - A throughput stage now fails when one of its sockets cannot connect. Previously the stage waited forever.
 
@@ -89,8 +85,6 @@ Results now follow the standard result format shared by every CoverageMap client
 
 ### Bug Fixes
 
-- **Upload after download on slow links against the CDN, in browsers**: The CDN server cannot reset a connection on `CLOSE`, so Cloudflare kept delivering the download frames it had queued, and a browser could only close those sockets gracefully. On a 1 Mbps link the upload stage then measured about 60% of the link (three runs: 40 to 73%), while an upload on its own measured 91%. The engine now runs the upload phase in a new stage worker and terminates the one that ran the download, which drops its sockets at once. The upload after a download now measures the same as on its own (0.90 to 0.92 Mbps, against 0.91 to 0.93). Against the Node.js servers, which reset the connection, nothing changes.
-
 - **Jitter now reports median jitter** — The `jitterMs` field in test results was previously reporting `minJitter`; it now correctly reports `medianJitter`.
 - Fixed bug where download speed would drop near the end of the test if the download buffer ended
 
@@ -102,8 +96,6 @@ Results now follow the standard result format shared by every CoverageMap client
 ## 0.3.1
 
 ### Bug Fixes
-
-- **Upload after download on slow links against the CDN, in browsers**: The CDN server cannot reset a connection on `CLOSE`, so Cloudflare kept delivering the download frames it had queued, and a browser could only close those sockets gracefully. On a 1 Mbps link the upload stage then measured about 60% of the link (three runs: 40 to 73%), while an upload on its own measured 91%. The engine now runs the upload phase in a new stage worker and terminates the one that ran the download, which drops its sockets at once. The upload after a download now measures the same as on its own (0.90 to 0.92 Mbps, against 0.91 to 0.93). Against the Node.js servers, which reset the connection, nothing changes.
 
 - **Prevent stale latency and jitter in live UI updates** — When a test completes, latency and jitter values from the latency test stage are now preserved rather than being overwritten by the final result snapshot. This eliminates a race condition where a later, less accurate value could replace the already-settled measurement visible in the UI.
 
@@ -131,8 +123,6 @@ Results now follow the standard result format shared by every CoverageMap client
 
 ### Bug Fixes
 
-- **Upload after download on slow links against the CDN, in browsers**: The CDN server cannot reset a connection on `CLOSE`, so Cloudflare kept delivering the download frames it had queued, and a browser could only close those sockets gracefully. On a 1 Mbps link the upload stage then measured about 60% of the link (three runs: 40 to 73%), while an upload on its own measured 91%. The engine now runs the upload phase in a new stage worker and terminates the one that ran the download, which drops its sockets at once. The upload after a download now measures the same as on its own (0.90 to 0.92 Mbps, against 0.91 to 0.93). Against the Node.js servers, which reset the connection, nothing changes.
-
 - **Fix inaccurate upload speed snapshots** — Replaced the sliding acknowledgement-window calculation with a simpler total-acknowledged-bytes-over-elapsed-duration approach, removing the moving window state (`ackEvents`, `ackBytesInWindow`, `MIN_SNAPSHOT_WINDOW_MS`). This produces more stable and accurate real-time upload speed readings.
 
 ### Demo & Developer Experience
@@ -150,8 +140,6 @@ Results now follow the standard result format shared by every CoverageMap client
 ## 0.2.1
 
 ### Bug Fixes
-
-- **Upload after download on slow links against the CDN, in browsers**: The CDN server cannot reset a connection on `CLOSE`, so Cloudflare kept delivering the download frames it had queued, and a browser could only close those sockets gracefully. On a 1 Mbps link the upload stage then measured about 60% of the link (three runs: 40 to 73%), while an upload on its own measured 91%. The engine now runs the upload phase in a new stage worker and terminates the one that ran the download, which drops its sockets at once. The upload after a download now measures the same as on its own (0.90 to 0.92 Mbps, against 0.91 to 0.93). Against the Node.js servers, which reset the connection, nothing changes.
 
 - **Fix upload results submitted on cancellation** — `SpeedTestEngine` no longer calls `uploadResults` when a test run is cancelled mid-flight. A `wasCancelled` guard was added so partial results are not sent to the backend.
 - **Fix inaccurate upload speed snapshots** — Upload throughput is now measured from server-acknowledged bytes (WebSocket ACK events) rather than raw bytes dispatched to the send buffer. Snapshots use a sliding acknowledgement window (`snapshotIntervalMs × 3`, minimum 300 ms) so real-time readings reflect actual throughput rather than buffered-but-unconfirmed data.

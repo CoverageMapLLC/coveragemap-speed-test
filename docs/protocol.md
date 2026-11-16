@@ -793,7 +793,7 @@ Failure reasons are the native engine's `FailureReason` values, so failures from
 | `protocolError` | The server answered with something the protocol does not allow |
 | `unknown` | Any other error |
 
-For example: `"connectionTimeout: Connection not open after 3000ms"`, `"connectionFailed: Download WebSocket connection 3 failed"`. A cancelled run has `failedReason: "Cancelled"`.
+For example: `"connectionTimeout: Connection not open after 3000ms"`, `"connectionFailed: Download WebSocket connection 3 failed"`. A cancelled run is the exception: `failedReason` is `"Cancelled"` and `failedStage` is the engine stage it was cancelled in (`latency`, `downloadEstimation`, `download`, `uploadEstimation`, or `upload`), as in the native engines. Cancelled runs are never uploaded, so only the `run()` result and `onComplete` carry these values.
 
 Partial results (where a stage failed) still include all data that was collected up to the point of failure. For example, if download succeeds but upload fails, the result contains valid `downloadSpeed` and `latency` but `uploadSpeed: null`.
 

@@ -360,7 +360,7 @@ interface NetworkTestResultSpeedTimePair {
 
 The CoverageMap app adds `noCoverage`. `<message>` is the error's message, for people rather than parsers. Results from library 0.6.0 and earlier have the bare message.
 
-`failedStage` is the start marker of the phase that failed: `latencyStart`, `downloadStart` (download estimation or throughput), or `uploadStart`. `testStatus` is `failed` whenever it is set.
+`failedStage` is the start marker of the phase that failed: `latencyStart`, `downloadStart` (download estimation or throughput), or `uploadStart`. A cancelled run is the exception: `failedReason` is `"Cancelled"` and `failedStage` is the engine stage it was cancelled in (`latency`, `downloadEstimation`, `download`, `uploadEstimation`, or `upload`), as in the native engines. Cancelled runs are never uploaded, so only the `run()` result and `onComplete` carry these values. `testStatus` is `failed` whenever `failedStage` is set.
 
 `loadedDownloadLatencies` and `loadedUploadLatencies` are the individual RTT samples (in milliseconds, rounded to 3 decimal places) collected by the loaded latency monitor during each throughput stage, from 1 s after the stage's first counted bytes on. Each element corresponds to one PING/PONG round trip measured while the link was saturated. Both fields are `null` when the corresponding stage was not run or when no ping round trips completed before the stage ended (including a stage that ended before that delay).
 

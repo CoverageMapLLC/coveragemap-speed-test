@@ -1248,7 +1248,7 @@ interface NetworkTestResultMeasurements {
 | `loadedDownloadLatencies`, `loadedUploadLatencies` | `number[] \| null` | Round trips measured during each throughput stage, from 1 s after its first counted bytes. `null` if the stage did not run or no ping completed. |
 | `downloadList`, `uploadList` | `NetworkTestResultSpeedTimePair[] \| null` | Progress snapshots of each throughput stage. |
 | `failedReason` | `string \| null` | `"<reason>: <message>"` when a stage failed, `"Cancelled"` when the run was cancelled. See [Result schema](./result-schema.md#failedreason). |
-| `failedStage` | `TestStage \| null` | Start marker of the phase that failed: `'latencyStart'`, `'downloadStart'`, or `'uploadStart'`. |
+| `failedStage` | `TestStage \| null` | Start marker of the phase that failed: `'latencyStart'`, `'downloadStart'`, or `'uploadStart'`. For a cancelled run (`failedReason: 'Cancelled'`, never uploaded) it is the engine stage it was cancelled in instead, such as `'latency'` or `'download'`. |
 
 ---
 
