@@ -16,6 +16,9 @@ export interface LatencyTestOptions {
   nodeWebSocket?: boolean;
 }
 
+/** How long after this stage's own deadlines the socket's connect timeout fires, as a backstop. */
+const SOCKET_CONNECT_BACKSTOP_MS = 1000;
+
 export async function runLatencyTest(options: LatencyTestOptions): Promise<LatencyTestData> {
   const { serverUrl, pingCount, timeoutMs = 10000, connectTimeoutMs, cancellationToken, onPing, nodeWebSocket } = options;
 
@@ -27,6 +30,19 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
     let didConnect = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let connectTimer: ReturnType<typeof setTimeout> | null = null;
+    /*
+     * The first outcome wins. Node.js sockets (raw TCP and the library's WebSocket client) fire
+     * `error` synchronously when they are closed while still connecting, so without this the
+     * `cleanup()` of a timeout would report a refused connection instead of the timeout.
+     */
+    let settled = false;
+    const settle = (outcome: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      outcome();
+    };
+    const fail = (error: Error) => settle(() => reject(error));
 
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
@@ -41,18 +57,16 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
     };
 
     const complete = () => {
-      cleanup();
       if (pingTimes.length === 0) {
-        reject(new SpeedTestError('timeout', 'No ping responses received'));
+        fail(new SpeedTestError('timeout', 'No ping responses received'));
         return;
       }
-      resolve(computeLatencyData(pingTimes));
+      settle(() => resolve(computeLatencyData(pingTimes)));
     };
 
     const sendPing = () => {
       if (cancellationToken.isCancelled) {
-        cleanup();
-        reject(new CancellationError());
+        fail(new CancellationError());
         return;
       }
       try {
@@ -60,32 +74,29 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
         pingStartTime = performance.now();
         sentPings++;
       } catch (error) {
-        cleanup();
-        reject(new SpeedTestError('connectionFailed', `Failed to send ping: ${error}`));
+        fail(new SpeedTestError('connectionFailed', `Failed to send ping: ${error}`));
       }
     };
 
-    cancellationToken.onCancel(() => {
-      cleanup();
-      reject(new CancellationError());
-    });
+    cancellationToken.onCancel(() => fail(new CancellationError()));
 
     timeoutId = setTimeout(() => {
       if (pingTimes.length >= 3) {
         complete();
       } else {
-        cleanup();
         const message = `Latency test timed out after ${timeoutMs}ms. Connected: ${didConnect}, Pings sent: ${sentPings}`;
-        reject(didConnect ? new SpeedTestError('timeout', message) : new SocketConnectError(message, 'connectionTimeout'));
+        fail(didConnect ? new SpeedTestError('timeout', message) : new SocketConnectError(message, 'connectionTimeout'));
       }
     }, timeoutMs);
 
     try {
-      socket = openSocket(serverUrl, { connectTimeoutMs, nodeWebSocket });
+      // This stage times the connection itself (connectTimeoutMs, then timeoutMs). The socket's
+      // own connect timeout is only a backstop after both, so it never decides the outcome.
+      const socketConnectTimeoutMs = Math.max(connectTimeoutMs ?? 0, timeoutMs) + SOCKET_CONNECT_BACKSTOP_MS;
+      socket = openSocket(serverUrl, { connectTimeoutMs: socketConnectTimeoutMs, nodeWebSocket });
       socket.binaryType = 'arraybuffer';
     } catch (error) {
-      cleanup();
-      reject(new SpeedTestError(getFailureReasonOr(error, 'connectionFailed'), `Failed to create WebSocket: ${error}`));
+      fail(new SpeedTestError(getFailureReasonOr(error, 'connectionFailed'), `Failed to create WebSocket: ${error}`));
       return;
     }
 
@@ -94,8 +105,7 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
       // would otherwise hold the run until the latency timeout.
       connectTimer = setTimeout(() => {
         if (didConnect) return;
-        cleanup();
-        reject(new SocketConnectError(`Connection not open after ${connectTimeoutMs}ms`, 'connectionTimeout'));
+        fail(new SocketConnectError(`Connection not open after ${connectTimeoutMs}ms`, 'connectionTimeout'));
       }, connectTimeoutMs);
     }
 
@@ -124,9 +134,8 @@ export async function runLatencyTest(options: LatencyTestOptions): Promise<Laten
     };
 
     socket.onerror = () => {
-      cleanup();
       // Failing before the socket opened means the server could not be reached this way.
-      reject(
+      fail(
         didConnect
           ? new SpeedTestError('connectionFailed', 'WebSocket error during latency test')
           : new SocketConnectError('WebSocket connection failed during latency test')
