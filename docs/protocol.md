@@ -788,7 +788,7 @@ Failure reasons are the native engine's `FailureReason` values, so failures from
 | `unreachable` | No transport the server offers can be used from this runtime |
 | `connectionFailed` | A connection was refused, could not be created, or dropped |
 | `connectionTimeout` | A connection did not open in time (the first connection's 3 s window, or a stage timeout before it connected) |
-| `transferTimeout` | A throughput stage did not move data |
+| `transferTimeout` | A throughput stage did not move data: none within 10 s, or none by the end of a shorter stage (as in the native engines) |
 | `timeout` | A stage did not finish in time after it connected |
 | `protocolError` | The server answered with something the protocol does not allow |
 | `unknown` | Any other error |

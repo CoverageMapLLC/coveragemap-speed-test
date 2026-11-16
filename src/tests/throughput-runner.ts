@@ -34,6 +34,13 @@ export interface ThroughputTestOptions {
 export const RAMP_UP_EXCLUSION_MS = 250;
 /** Loaded latency pings start this long after the stage's first counted bytes, once the link is loaded. */
 export const LOADED_LATENCY_DELAY_MS = 1000;
+/**
+ * A throughput stage that has counted no bytes this long after its sockets opened fails with
+ * `transferTimeout`, as in the native engines (their `transferTimeoutMs` default). A stage
+ * shorter than this that moves nothing fails the same way when it ends: a stage that moved no
+ * data did not measure the link.
+ */
+export const TRANSFER_TIMEOUT_MS = 10_000;
 
 /**
  * Runs a download or upload throughput stage: opens the lanes, starts them together once
@@ -98,7 +105,13 @@ export function runThroughputTest(
         ? calculateSpeedSinceMbps(bytes, elapsed, measuredFromBytes, measuredFromMs)
         : calculateStageSpeedMbps(bytes, elapsed, latencyMs, jitterMs);
 
+    let transferTimer: ReturnType<typeof setTimeout> | null = null;
+    const noDataError = (afterMs: number, at: 'after' | 'in') =>
+      new SpeedTestError('transferTimeout', `No ${direction} data ${at} ${Math.round(afterMs)} ms`);
+
     const clearStageTimers = () => {
+      if (transferTimer) clearTimeout(transferTimer);
+      transferTimer = null;
       if (rampUpTimer) clearTimeout(rampUpTimer);
       rampUpTimer = null;
       if (loadedLatencyTimer) clearTimeout(loadedLatencyTimer);
@@ -130,6 +143,9 @@ export function runThroughputTest(
       if (finishTimer) clearTimeout(finishTimer);
       clearStageTimers();
       for (const lane of lanes ?? []) lane.close();
+      // Also when the stage failed: close the loaded latency socket. stop() is idempotent, so a
+      // stage that finished normally (and already awaited it) is unaffected.
+      void loadedLatencyMonitor.stop().catch(() => {});
     };
 
     const settle = (
@@ -153,6 +169,10 @@ export function runThroughputTest(
       snapshotTimer = null;
       const elapsed = performance.now() - testStartTime;
       const bytes = totalBytes();
+      if (bytes === 0) {
+        settle(reject, noDataError(durationMs, 'in'));
+        return;
+      }
       const speedMbps = speed(bytes, elapsed);
       // The stage is over: ask for no more data (no refill goes out after the stage), but keep
       // the sockets open, so the loaded latency monitor's last ping still measures a loaded link
@@ -199,6 +219,13 @@ export function runThroughputTest(
       finishTimer = setTimeout(() => {
         void finishTest();
       }, durationMs);
+
+      if (TRANSFER_TIMEOUT_MS < durationMs) {
+        transferTimer = setTimeout(() => {
+          transferTimer = null;
+          if (!settled && !finishing && totalBytes() === 0) settle(reject, noDataError(TRANSFER_TIMEOUT_MS, 'after'));
+        }, TRANSFER_TIMEOUT_MS);
+      }
 
       try {
         loadedLatencyMonitor.start();

@@ -24,6 +24,8 @@ Results now follow the standard result format shared by every CoverageMap client
 
 ### Bug Fixes
 
+- **A throughput stage that moves no data fails**: A download or upload stage that counted no bytes passed with 0 Mbps. It now fails with `transferTimeout` (`"transferTimeout: No download data in 7000 ms"`), like the native engines: after 10 s with no data, or at the end of a shorter stage. The loaded latency socket of a stage that fails is now closed too.
+
 - **Upload after download on slow links against the CDN, in browsers**: The CDN server cannot reset a connection on `CLOSE`, so Cloudflare kept delivering the download frames it had queued, and a browser could only close those sockets gracefully. On a 1 Mbps link the upload stage then measured about 60% of the link (three runs: 40 to 73%), while an upload on its own measured 91%. The engine now runs the upload phase in a new stage worker and terminates the one that ran the download, which drops its sockets at once. The upload after a download now measures the same as on its own (0.90 to 0.92 Mbps, against 0.91 to 0.93). Against the Node.js servers, which reset the connection, nothing changes.
 
 - With the latency stage disabled, a failed latency normalization ping on an engine that had already run a test was reported with `failedStage: null` and `testStatus: "passed"`. It now fails the phase it runs in.
