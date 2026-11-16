@@ -142,6 +142,32 @@ describe('engine stage runner', () => {
     expect(order).toEqual(['close download worker', 'upload estimation']);
   });
 
+  it('terminates the upload worker when the run is cancelled while it is still starting', async () => {
+    const runner = scriptedRunner();
+    const uploadRunner = scriptedRunner();
+    const engine = new SpeedTestEngine({ application, config: { transport: 'wss' } });
+    let readyAfterCancel = false;
+    mocks.createStageRunner.mockResolvedValueOnce(runner).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          // Cancel in the cooldown, then report the new worker ready only afterwards.
+          setTimeout(() => engine.cancel(), 10);
+          setTimeout(() => {
+            readyAfterCancel = true;
+            resolve(uploadRunner);
+          }, 100);
+        })
+    );
+
+    const result = await engine.run(server);
+
+    expect(readyAfterCancel).toBe(true);
+    expect(result.results.measurements.failedReason).toBe('Cancelled');
+    expect(runner.close).toHaveBeenCalledTimes(1);
+    expect(uploadRunner.close).toHaveBeenCalledTimes(1);
+    expect(uploadRunner.runUploadEstimationTest).not.toHaveBeenCalled();
+  });
+
   it('keeps one runner on the calling thread, which has no worker to terminate', async () => {
     const runner = Object.assign(scriptedRunner(), { mode: 'local' as const });
     mocks.createStageRunner.mockResolvedValue(runner);

@@ -398,7 +398,14 @@ export class SpeedTestEngine {
               stageRunner.close();
               runner = stageRunner = await createStageRunner(true);
             };
-            await Promise.all([this.delay(500), restartWorker()]);
+            const restarting = restartWorker();
+            try {
+              await this.delay(500);
+            } finally {
+              // Also when the cooldown is cancelled: the new worker must be assigned to `runner`
+              // before the run's `finally` closes it, or nothing would ever terminate it.
+              await restarting;
+            }
           }
 
           this.setStage('uploadEstimation');
