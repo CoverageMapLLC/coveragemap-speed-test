@@ -318,7 +318,10 @@ describe('startStageWorker (engine side)', () => {
       });
       expect(data.bytes).toBeGreaterThan(0);
       expect(snapshots.length).toBeGreaterThanOrEqual(3);
-      expect(data.snapshots).toEqual(snapshots);
+      // Progress carries the live speed, which blends into the measured speed after the
+      // measurement start; its times and bytes are the stored snapshots'.
+      const timesAndBytes = (list: SpeedSnapshot[]) => list.map(({ timeOffsetMs, bytes }) => ({ timeOffsetMs, bytes }));
+      expect(timesAndBytes(data.snapshots)).toEqual(timesAndBytes(snapshots));
     }
   });
 

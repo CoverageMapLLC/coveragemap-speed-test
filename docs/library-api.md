@@ -443,9 +443,9 @@ interface SpeedTestCallbacks {
 | `onStageChange` | `stage: SpeedTestStage` | Fired whenever the engine transitions to a new stage. |
 | `onLatencyPing` | `latencyMs: number, index: number` | Fired after each individual ping response is received. `index` is 0-based. Only fires during the full latency stage; not fired for the silent single-ping fallback. |
 | `onLatencyResult` | `data: LatencyTestData` | Fired once when the full latency stage aggregation completes. |
-| `onDownloadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained download stage at `snapshotIntervalMs` intervals. |
+| `onDownloadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained download stage at `snapshotIntervalMs` intervals. Its `speedMbps` is the live speed, which eases into the measured speed over the first second of the measurement (see [`SpeedSnapshot`](#speedsnapshot)). |
 | `onDownloadResult` | `data: SpeedTestData` | Fired once when the sustained download stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
-| `onUploadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained upload stage. |
+| `onUploadProgress` | `snapshot: SpeedSnapshot` | Fired repeatedly during the sustained upload stage, with the live speed like `onDownloadProgress`. |
 | `onUploadResult` | `data: SpeedTestData` | Fired once when the sustained upload stage completes with the final aggregated result. `data.loadedLatency` contains under-load latency measurements collected concurrently during the stage. |
 | `onComplete` | `latencyData, downloadData, uploadData, result` | Fired after the run assembles final measurements. The first three arguments are the aggregated stage results (`null` if that stage was not run or did not complete). `result` is the complete `NetworkTestResultTestResults` payload — the same object returned by `run()`. A copy is uploaded to CoverageMap before this callback runs, so changing `result` doesn't change the upload. |
 | `onError` | `error: Error, stage: SpeedTestStage` | Fired for non-cancellation stage failures. Cancellation does not emit this. Errors the library raises carry a `reason` (`SpeedTestFailureReason`, see [`SpeedTestError`](#speedtesterror)). |
@@ -910,7 +910,7 @@ interface SpeedSnapshot {
 | Field | Type | Description |
 |-------|------|-------------|
 | `timeOffsetMs` | `number` | Time elapsed since the stage started, in milliseconds. |
-| `speedMbps` | `number` | Throughput so far, by the same rule as the stage's final `speedMbps`: over the whole stage until the measurement start (250 ms after the first bytes), from the measurement start afterwards. |
+| `speedMbps` | `number` | Throughput so far. In `SpeedTestData.snapshots` (and the result's `downloadList` / `uploadList`), by the same rule as the stage's final `speedMbps`: over the whole stage until the measurement start (250 ms after the first bytes), from the measurement start afterwards. In `onDownloadProgress` / `onUploadProgress`, the live speed: the same until the measurement start, then moving in a straight line from the whole-stage speed to the measured speed over the next 1,000 ms, and the measured speed from then on. Right after the measurement start the measured window is only milliseconds long and holds no message or `ACK` at all, or a whole one, so switching to it at once made a speed gauge jump and flicker. |
 | `bytes` | `number` | Cumulative bytes transferred at this snapshot. |
 
 ---

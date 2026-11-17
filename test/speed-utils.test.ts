@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { calculateSpeedMbps, formatBytes, formatLatency, formatSpeed, roundTo3Decimals } from '../src/utils/speed.js';
+import {
+  LIVE_SPEED_BLEND_MS,
+  calculateLiveSpeedMbps,
+  calculateSpeedMbps,
+  formatBytes,
+  formatLatency,
+  formatSpeed,
+  roundTo3Decimals,
+} from '../src/utils/speed.js';
 
 describe('speed utility helpers', () => {
   it('calculates Mbps from bytes and milliseconds', () => {
@@ -12,6 +20,23 @@ describe('speed utility helpers', () => {
     expect(roundTo3Decimals(12.3456)).toBe(12.346);
     expect(roundTo3Decimals(0.0004)).toBe(0);
     expect(calculateSpeedMbps(1_000_000, 3333)).toBe(2.4);
+  });
+
+  it('moves the live speed from the whole-stage speed to the measured speed over a second', () => {
+    expect(LIVE_SPEED_BLEND_MS).toBe(1000);
+    // At (and before) the measurement start: the whole-stage speed, so the live speed doesn't jump.
+    expect(calculateLiveSpeedMbps(20, 1600, 0)).toBe(20);
+    expect(calculateLiveSpeedMbps(20, 1600, -3)).toBe(20);
+    // A few ms in, a spike (or an empty window) in the measured speed barely moves it.
+    expect(calculateLiveSpeedMbps(20, 1600, 5)).toBe(27.9);
+    expect(calculateLiveSpeedMbps(20, 0, 5)).toBe(19.9);
+    expect(calculateLiveSpeedMbps(20, 40, 500)).toBe(30);
+    expect(calculateLiveSpeedMbps(20, 40, 875)).toBe(37.5);
+    expect(calculateLiveSpeedMbps(20, 10, 500)).toBe(15);
+    // From a second on: the measured speed, as in the stored snapshots and the result.
+    expect(calculateLiveSpeedMbps(20, 40, 1000)).toBe(40);
+    expect(calculateLiveSpeedMbps(20, 40.123, 4000)).toBe(40.123);
+    expect(calculateLiveSpeedMbps(20, 40, 333.333)).toBe(26.667);
   });
 
   it('formats speed with threshold precision', () => {

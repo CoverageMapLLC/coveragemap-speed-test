@@ -504,9 +504,15 @@ speed(bytes, elapsed) =
   fromMs set and elapsed > fromMs ? (bytes - fromBytes) / ((elapsed - fromMs) * 125)
                                   : stageSpeed(bytes, elapsed)
 
+liveSpeed(bytes, elapsed) =                (progress callbacks only)
+  fromMs not set or elapsed <= fromMs ? stageSpeed(bytes, elapsed)
+  : w = min((elapsed - fromMs) / 1000, 1)  (LIVE_SPEED_BLEND_MS)
+    stageSpeed(bytes, elapsed) + (speed(bytes, elapsed) - stageSpeed(bytes, elapsed)) * w
+
 every snapshotIntervalMs (default 100ms):
   elapsed = now - testStartTime
-  emit SpeedSnapshot { timeOffsetMs: elapsed, speedMbps: speed(totalBytes, elapsed), bytes: totalBytes }
+  store SpeedSnapshot { timeOffsetMs: elapsed, speedMbps: speed(totalBytes, elapsed), bytes: totalBytes }
+  emit  the same snapshot with speedMbps: liveSpeed(totalBytes, elapsed)
 
 after durationMs (from testStartTime, not from the first bytes):
   elapsed = now - testStartTime
@@ -515,7 +521,7 @@ after durationMs (from testStartTime, not from the first bytes):
 
 All sockets accumulate into a single `totalBytes` counter. The final speed is computed from the aggregate data across all connections. Speeds are rounded to 3 decimal places.
 
-The ramp-up at the start of a stage, while the connections speed up, is left out of `speedMbps`: it is measured from 250 ms after the first bytes are counted (the first download bytes to arrive, or the first whole binary frame where bytes count per frame; the first `ACK` for upload) to the stage's end. Everything after that point counts, so a ramp-up longer than the exclusion still lowers the speed, and the wait for the first byte is already excluded, so no latency bias is subtracted. Before that point, or when the stage ends before it, the speed is the whole stage's. Snapshots switch formula at the same point, so the final value continues the last progress values. Both the 250 ms exclusion and the 1 s loaded latency delay are fixed; applications cannot configure them. With worker threads, each worker tells the main thread once when its lane counts its first bytes, and the main thread does all the timing.
+The ramp-up at the start of a stage, while the connections speed up, is left out of `speedMbps`: it is measured from 250 ms after the first bytes are counted (the first download bytes to arrive, or the first whole binary frame where bytes count per frame; the first `ACK` for upload) to the stage's end. Everything after that point counts, so a ramp-up longer than the exclusion still lowers the speed, and the wait for the first byte is already excluded, so no latency bias is subtracted. Before that point, or when the stage ends before it, the speed is the whole stage's. Snapshots switch formula at the same point, so the final value continues the last progress values. The progress callbacks get a live speed instead, so a gauge does not jump at that point: it is the whole stage's speed until the measurement start, then moves in a straight line to the measured speed over the next 1,000 ms (`LIVE_SPEED_BLEND_MS`), and is the measured speed from then on. Right after the start the measured window is only milliseconds long and holds no message or `ACK` at all, or a whole one, so its speed would read about 0 or spike. The snapshots stored in the result keep the measured speed. Both the 250 ms exclusion and the 1 s loaded latency delay are fixed; applications cannot configure them. With worker threads, each worker tells the main thread once when its lane counts its first bytes, and the main thread does all the timing.
 
 #### Loaded Latency Monitor
 

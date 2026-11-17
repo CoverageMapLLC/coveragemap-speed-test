@@ -1,7 +1,11 @@
 import type { LatencyTestData, SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { SpeedTestError } from '../utils/failure.js';
-import { calculateSpeedSinceMbps, calculateStageSpeedMbps } from '../utils/speed.js';
+import {
+  calculateLiveSpeedMbps,
+  calculateSpeedSinceMbps,
+  calculateStageSpeedMbps,
+} from '../utils/speed.js';
 import { createLoadedLatencyMonitor } from './loaded-latency-test.js';
 import {
   openThroughputLane,
@@ -25,6 +29,11 @@ export interface ThroughputTestOptions {
    */
   threads?: number;
   cancellationToken: CancellationToken;
+  /**
+   * Called with each snapshot, with its live `speedMbps`: like the stored snapshot's, but moving
+   * from the whole-stage speed to the measured speed over the `LIVE_SPEED_BLEND_MS` after the
+   * measurement start (see `calculateLiveSpeedMbps`), so a progress display does not jump there.
+   */
   onSnapshot?: (snapshot: SpeedSnapshot) => void;
   /** `false` opens WebSockets with `globalThis.WebSocket`, not the Node.js client. See `SpeedTestConfig.nodeWebSocket`. */
   nodeWebSocket?: boolean;
@@ -53,6 +62,10 @@ export const TRANSFER_TIMEOUT_MS = 10_000;
  * `durationMs` from when the sockets opened. The loaded latency monitor connects at the start but
  * pings from `LOADED_LATENCY_DELAY_MS` (1 s) after the first bytes, once the link carries the
  * stage's traffic.
+ *
+ * `onSnapshot` gets the live speed, which moves from the whole-stage speed to the measured speed
+ * over the second after the measurement start; the snapshots stored in the result keep the
+ * measured speed.
  */
 export function runThroughputTest(
   direction: ThroughputDirection,
@@ -104,6 +117,19 @@ export function runThroughputTest(
       measuredFromMs !== null && elapsed > measuredFromMs
         ? calculateSpeedSinceMbps(bytes, elapsed, measuredFromBytes, measuredFromMs)
         : calculateStageSpeedMbps(bytes, elapsed, latencyMs, jitterMs);
+
+    /**
+     * The live speed for `onSnapshot`: the whole-stage speed until the measurement start, then
+     * moving to `speed` over `LIVE_SPEED_BLEND_MS`. Right after the start the measured window is
+     * a few ms long, and holds no message or `ACK` at all, or a whole one: the live speed would
+     * drop to about 0 or spike.
+     */
+    const liveSpeed = (bytes: number, elapsed: number) => {
+      const stageSpeed = calculateStageSpeedMbps(bytes, elapsed, latencyMs, jitterMs);
+      if (measuredFromMs === null || elapsed <= measuredFromMs) return stageSpeed;
+      const measured = calculateSpeedSinceMbps(bytes, elapsed, measuredFromBytes, measuredFromMs);
+      return calculateLiveSpeedMbps(stageSpeed, measured, elapsed - measuredFromMs);
+    };
 
     let transferTimer: ReturnType<typeof setTimeout> | null = null;
     const noDataError = (afterMs: number, at: 'after' | 'in') =>
@@ -213,7 +239,10 @@ export function runThroughputTest(
           bytes,
         };
         snapshots.push(snapshot);
-        onSnapshot?.(snapshot);
+        if (onSnapshot) {
+          const live = liveSpeed(bytes, elapsed);
+          onSnapshot(live === snapshot.speedMbps ? snapshot : { ...snapshot, speedMbps: live });
+        }
       }, snapshotIntervalMs);
 
       finishTimer = setTimeout(() => {
