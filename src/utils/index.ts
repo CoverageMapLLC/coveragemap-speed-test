@@ -1,4 +1,6 @@
 export { CancellationToken, CancellationError } from './cancellation.js';
+export { SpeedTestError, getFailureReason, formatFailedReason } from './failure.js';
+export type { SpeedTestFailureReason } from './failure.js';
 export { generateUUID } from './uuid.js';
 export { calculateSpeedMbps, formatSpeed, formatBytes, formatLatency, roundTo3Decimals } from './speed.js';
 export {

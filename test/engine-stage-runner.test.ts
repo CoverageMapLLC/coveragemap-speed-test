@@ -86,7 +86,8 @@ beforeEach(() => {
 describe('engine stage runner', () => {
   it('asks for the browser worker by default and runs every stage through it', async () => {
     const runner = scriptedRunner();
-    mocks.createStageRunner.mockResolvedValue(runner);
+    const uploadRunner = scriptedRunner();
+    mocks.createStageRunner.mockResolvedValueOnce(runner).mockResolvedValueOnce(uploadRunner);
     const pings: number[] = [];
     const downloads: number[] = [];
     const uploads: number[] = [];
@@ -102,7 +103,9 @@ describe('engine stage runner', () => {
 
     const result = await engine.run(server);
 
-    expect(mocks.createStageRunner).toHaveBeenCalledWith(true);
+    expect(mocks.createStageRunner).toHaveBeenCalledTimes(2);
+    expect(mocks.createStageRunner).toHaveBeenNthCalledWith(1, true);
+    expect(mocks.createStageRunner).toHaveBeenNthCalledWith(2, true);
     expect(result.results.testStatus).toBe('passed');
     expect(result.results.measurements.downloadSpeed).toBe(900);
     expect(result.results.measurements.uploadSpeed).toBe(800);
@@ -112,14 +115,74 @@ describe('engine stage runner', () => {
     for (const stage of [
       runner.runLatencyTest,
       runner.runDownloadEstimationTest,
-      runner.runUploadEstimationTest,
       runner.runDownloadSpeedTest,
-      runner.runUploadSpeedTest,
+      uploadRunner.runUploadEstimationTest,
+      uploadRunner.runUploadSpeedTest,
     ]) {
       expect(stage).toHaveBeenCalledTimes(1);
       expect((stage as ReturnType<typeof vi.fn>).mock.calls[0][0].serverUrl).toBe('wss://speed.example.com:443/v1/ws');
     }
+    expect(runner.runUploadEstimationTest).not.toHaveBeenCalled();
+    expect(uploadRunner.runDownloadSpeedTest).not.toHaveBeenCalled();
     expect(runner.close).toHaveBeenCalledTimes(1);
+    expect(uploadRunner.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('terminates the download worker before the upload phase, so its sockets stop receiving', async () => {
+    const order: string[] = [];
+    const runner = scriptedRunner();
+    const uploadRunner = scriptedRunner();
+    runner.close.mockImplementation(() => order.push('close download worker'));
+    (uploadRunner.runUploadEstimationTest as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push('upload estimation');
+      return { durationMs: 100, bytes: 1e6, speedMbps: 800 };
+    });
+    mocks.createStageRunner.mockResolvedValueOnce(runner).mockResolvedValueOnce(uploadRunner);
+    await new SpeedTestEngine({ application, config: { transport: 'wss' } }).run(server);
+    expect(order).toEqual(['close download worker', 'upload estimation']);
+  });
+
+  it('terminates the upload worker when the run is cancelled while it is still starting', async () => {
+    const runner = scriptedRunner();
+    const uploadRunner = scriptedRunner();
+    const engine = new SpeedTestEngine({ application, config: { transport: 'wss' } });
+    let readyAfterCancel = false;
+    mocks.createStageRunner.mockResolvedValueOnce(runner).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          // Cancel in the cooldown, then report the new worker ready only afterwards.
+          setTimeout(() => engine.cancel(), 10);
+          setTimeout(() => {
+            readyAfterCancel = true;
+            resolve(uploadRunner);
+          }, 100);
+        })
+    );
+
+    const result = await engine.run(server);
+
+    expect(readyAfterCancel).toBe(true);
+    expect(result.results.measurements.failedReason).toBe('Cancelled');
+    expect(runner.close).toHaveBeenCalledTimes(1);
+    expect(uploadRunner.close).toHaveBeenCalledTimes(1);
+    expect(uploadRunner.runUploadEstimationTest).not.toHaveBeenCalled();
+  });
+
+  it('keeps one runner on the calling thread, which has no worker to terminate', async () => {
+    const runner = Object.assign(scriptedRunner(), { mode: 'local' as const });
+    mocks.createStageRunner.mockResolvedValue(runner);
+    const result = await new SpeedTestEngine({ application, config: { transport: 'wss' } }).run(server);
+    expect(result.results.testStatus).toBe('passed');
+    expect(mocks.createStageRunner).toHaveBeenCalledTimes(1);
+    expect(runner.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the worker when there is no download phase before the upload', async () => {
+    const runner = scriptedRunner();
+    mocks.createStageRunner.mockResolvedValue(runner);
+    await new SpeedTestEngine({ application, config: { transport: 'wss' }, tests: { download: false } }).run(server);
+    expect(mocks.createStageRunner).toHaveBeenCalledTimes(1);
+    expect(runner.runUploadSpeedTest).toHaveBeenCalledTimes(1);
   });
 
   it('asks for the calling thread when browserWorker is false', async () => {
@@ -130,16 +193,18 @@ describe('engine stage runner', () => {
   });
 
   it('closes the runner when a stage fails', async () => {
+    const downloadRunner = scriptedRunner();
     const runner = scriptedRunner();
     (runner.runUploadSpeedTest as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('The speed test worker failed: crashed'));
-    mocks.createStageRunner.mockResolvedValue(runner);
+    mocks.createStageRunner.mockResolvedValueOnce(downloadRunner).mockResolvedValueOnce(runner);
     const engine = new SpeedTestEngine({ application, config: { transport: 'wss' } });
 
     const result = await engine.run(server);
 
     expect(result.results.testStatus).toBe('failed');
-    expect(result.results.measurements.failedReason).toBe('The speed test worker failed: crashed');
+    expect(result.results.measurements.failedReason).toBe('unknown: The speed test worker failed: crashed');
     expect(result.results.measurements.failedStage).toBe('uploadStart');
+    expect(downloadRunner.close).toHaveBeenCalledTimes(1);
     expect(runner.close).toHaveBeenCalledTimes(1);
   });
 
@@ -160,15 +225,13 @@ describe('engine stage runner', () => {
   });
 
   it('starts a new runner for every run', async () => {
-    const first = scriptedRunner();
-    const second = scriptedRunner();
-    mocks.createStageRunner.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const runners = [scriptedRunner(), scriptedRunner(), scriptedRunner(), scriptedRunner()];
+    for (const runner of runners) mocks.createStageRunner.mockResolvedValueOnce(runner);
     const engine = new SpeedTestEngine({ application, config: { transport: 'wss' } });
     await engine.run(server);
     await engine.run(server);
-    expect(first.close).toHaveBeenCalledTimes(1);
-    expect(second.close).toHaveBeenCalledTimes(1);
-    expect(second.runLatencyTest).toHaveBeenCalledTimes(1);
+    for (const runner of runners) expect(runner.close).toHaveBeenCalledTimes(1);
+    expect(runners[2].runLatencyTest).toHaveBeenCalledTimes(1);
   });
 });
 

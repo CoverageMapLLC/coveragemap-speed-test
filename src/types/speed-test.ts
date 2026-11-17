@@ -97,9 +97,9 @@ export interface SpeedTestSelection {
 }
 
 export const DEFAULT_CONFIG: SpeedTestConfig = {
-  pingCount: 10,
-  downloadDurationMs: 10000,
-  uploadDurationMs: 10000,
+  pingCount: 15,
+  downloadDurationMs: 7000,
+  uploadDurationMs: 7000,
   snapshotIntervalMs: 100,
   latencyTimeoutMs: 10000,
   estimationTimeoutMs: 15000,

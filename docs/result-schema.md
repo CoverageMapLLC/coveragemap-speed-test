@@ -30,6 +30,7 @@ type LocationType = 'device' | 'ip';
 
 type TestStage =
   | 'latencyStart'
+  | 'latencyEnd'
   | 'downloadStart'
   | 'downloadEnd'
   | 'uploadStart'
@@ -46,6 +47,7 @@ type ApplicationType = 'web' | 'backend' | 'mobile' | 'desktop' | 'cli' | 'serve
 
 ```ts
 interface NetworkTestResultTestResults {
+  source: 'external';
   version: number;
   device: NetworkTestResultDevice;
   testType: NetworkTestResultTestType;
@@ -54,10 +56,16 @@ interface NetworkTestResultTestResults {
 }
 ```
 
+### `source`
+
+- Always `"external"` in results from this library (and from the native engine's external format): the result comes from an application built on the library, identified by `device.application.id`.
+- Results from the CoverageMap app have no `source`. Absent means the CoverageMap app.
+- `source` is identity, not format: the Core API uses it to classify the upload and decide how far to trust it.
+
 ### `version`
 
 - Schema version for compatibility tracking.
-- Current value is `1`.
+- Current value is `1`. New fields are added as nullable fields without changing it, so every payload already stored stays valid; results from older library versions simply lack them.
 - Consumers should store this and gate parsing logic by version for future-proofing.
 
 ## `device`
@@ -159,6 +167,10 @@ interface NetworkTestResultTestType {
   testProtocol: string;
   downloadConnectionCount: number | null;
   uploadConnectionCount: number | null;
+  requestedDownloadConnectionCount: number | null;
+  establishedDownloadConnectionCount: number | null;
+  requestedUploadConnectionCount: number | null;
+  establishedUploadConnectionCount: number | null;
   downloadPacketSize: number | null;
   uploadPacketSize: number | null;
 }
@@ -172,7 +184,9 @@ Frequently used fields:
 - `testsRun`: flags indicating which of the three test phases (latency, download, upload) were enabled for this run
 - `downloadTestDuration` and `uploadTestDuration`: `null` when the corresponding test was not enabled
 - `testProtocol`: the transport the stages ran over: `TCP` (raw TCP, Node.js only), `WS` (WebSocket), or `WSS` (secure WebSocket, used on HTTPS pages and for servers that offer nothing else). See `config.transport`
-- `downloadConnectionCount` and `uploadConnectionCount`: `null` when the corresponding test was not enabled or did not reach the estimation phase
+- `requestedDownloadConnectionCount` and `requestedUploadConnectionCount`: the connections the throughput stage asked for, from the estimate (1, 2, 4, 6, 8, or 12). `null` when the test was not enabled or its estimation did not complete
+- `establishedDownloadConnectionCount` and `establishedUploadConnectionCount`: the connections that opened. A throughput stage starts only once every one of its connections is open (one that cannot open fails the stage), so this equals the requested count. `null` when the test was not enabled or its throughput stage did not complete
+- `downloadConnectionCount` and `uploadConnectionCount`: the connections that carried the throughput stage, the same as the established count. `null` when the test was not enabled or its throughput stage did not complete (results from library 0.6.0 and earlier report the requested count once estimation completed)
 - `downloadPacketSize` and `uploadPacketSize`: `null` when the corresponding test was not enabled or did not reach the estimation phase
 
 ## `results`
@@ -296,6 +310,8 @@ A custom `networkProvider` can override this behaviour and set whichever blocks 
 ```ts
 interface NetworkTestResultMeasurements {
   dateTime: string | null;
+  estimatedDownloadSpeed: number | null;
+  estimatedUploadSpeed: number | null;
   downloadSpeed: number | null;
   totalDownload: number | null;
   uploadSpeed: number | null;
@@ -318,9 +334,33 @@ interface NetworkTestResultSpeedTimePair {
 }
 ```
 
+`dateTime` is when the test started and `results.dateTime` when the result was assembled, both ISO 8601 UTC with `Z`.
+
+`estimatedDownloadSpeed` and `estimatedUploadSpeed` are the Mbps measured by the estimation stages, which pick the connection count and message size of the throughput stages. They are rounded to 3 decimals and `null` when the estimation did not complete (or the test was not enabled).
+
 `downloadSpeed` and `uploadSpeed` are the stages' `speedMbps`: measured from 250 ms after the stage's first counted bytes to its end, so the ramp-up at the start does not count. `totalDownload` and `totalUpload` are the whole stage's bytes. A stage that ended before that point is measured as a whole.
 
-`downloadList` and `uploadList` are time-series samples (time offset, speed, bytes). Their speeds follow the same rule as the final speed: over the whole stage until the measurement start, from the measurement start afterwards. `failedReason` / `failedStage` are set when the run does not complete successfully.
+`latency` is the **minimum** round trip of the latency stage, `jitter` the **median** difference between consecutive round trips, and `latenciesList` every round trip (ms, 3 decimals). All three are `null` when the latency stage was not enabled (`testType.testsRun.latency` is `false`): the single ping that then still runs, to normalize the later stages' timing, is not reported. Results from library 0.6.0 and earlier reported that ping here.
+
+`downloadList` and `uploadList` are time-series samples (time offset in ms, rounded; speed; bytes). Their speeds follow the same rule as the final speed: over the whole stage until the measurement start, from the measurement start afterwards. `failedReason` / `failedStage` are set when the run does not complete successfully.
+
+### `failedReason`
+
+`"<reason>: <message>"` when a stage failed, or `"Cancelled"` for a cancelled run (which is returned by `run()` but not uploaded). `null` when the test passed. `<reason>` is one of the native engine's `FailureReason` values, so failures from every CoverageMap client group the same way:
+
+| Reason | When |
+|---|---|
+| `unreachable` | No transport the server offers can be used from this runtime |
+| `connectionFailed` | A connection was refused, could not be created, or dropped |
+| `connectionTimeout` | A connection did not open in time |
+| `transferTimeout` | A throughput stage did not move data |
+| `timeout` | A stage did not finish in time after it connected |
+| `protocolError` | The server answered with something the protocol does not allow |
+| `unknown` | Any other error |
+
+The CoverageMap app adds `noCoverage`. `<message>` is the error's message, for people rather than parsers. Results from library 0.6.0 and earlier have the bare message.
+
+`failedStage` is the start marker of the phase that failed: `latencyStart`, `downloadStart` (download estimation or throughput), or `uploadStart`. A cancelled run is the exception: `failedReason` is `"Cancelled"` and `failedStage` is the engine stage it was cancelled in (`latency`, `downloadEstimation`, `download`, `uploadEstimation`, or `upload`), as in the native engines. Cancelled runs are never uploaded, so only the `run()` result and `onComplete` carry these values. `testStatus` is `failed` whenever `failedStage` is set.
 
 `loadedDownloadLatencies` and `loadedUploadLatencies` are the individual RTT samples (in milliseconds, rounded to 3 decimal places) collected by the loaded latency monitor during each throughput stage, from 1 s after the stage's first counted bytes on. Each element corresponds to one PING/PONG round trip measured while the link was saturated. Both fields are `null` when the corresponding stage was not run or when no ping round trips completed before the stage ended (including a stage that ended before that delay).
 
@@ -342,7 +382,15 @@ interface NetworkTestResultStage {
 }
 ```
 
-`testStage` is typed as `string` in the schema; emitted values align with `TestStage` (`latencyStart`, `downloadStart`, etc.).
+`testStage` is typed as `string` in the schema; emitted values are `TestStage` values. `dateTime` is ISO 8601 UTC with `Z`.
+
+Marker rules:
+
+- `latencyStart` / `latencyEnd` surround the latency stage, only when it is enabled.
+- `downloadStart` / `uploadStart` mark the start of the download or upload **phase**, that is, of its estimation stage. `downloadEnd` / `uploadEnd` mark the end of its throughput stage.
+- An end marker is recorded whenever its phase ran and ended, passed or failed. A failed phase therefore has both markers, and `measurements.failedStage` names it. Results from library 0.6.0 and earlier have no end marker for the failed phase and no `latencyEnd`.
+- A cancelled run records no end marker for the phase it was cancelled in.
+- With the latency stage disabled, the latency normalization ping runs inside the first download or upload phase, after its start marker.
 
 ## Nullability expectations
 

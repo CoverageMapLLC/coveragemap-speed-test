@@ -201,7 +201,7 @@ describe('first connection fallback', () => {
   it('does not fall back when the connection opened and something else failed', async () => {
     mocks.latency.mockRejectedValue(new Error('No ping responses received'));
     const result = await run(remote(ALL));
-    expect(result).toMatchObject({ protocol: 'TCP', status: 'failed', failedReason: 'No ping responses received' });
+    expect(result).toMatchObject({ protocol: 'TCP', status: 'failed', failedReason: 'unknown: No ping responses received' });
     expect(result.latencyCalls).toEqual([['tcp://speed.example.com:443', 3000]]);
   });
 

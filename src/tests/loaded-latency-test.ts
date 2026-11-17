@@ -1,5 +1,6 @@
 import type { LatencyTestData } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
+import { SpeedTestError, getFailureReasonOr } from '../utils/failure.js';
 import { roundTo3Decimals } from '../utils/speed.js';
 import { computeLatencyData } from './latency-test.js';
 import { SOCKET_CLOSED, SOCKET_OPEN, openSocket } from './sockets.js';
@@ -97,7 +98,7 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
     } catch (error) {
       isStopped = true;
       isRunning = false;
-      failStop(new Error(`Failed to send loaded latency ping: ${error}`));
+      failStop(new SpeedTestError('connectionFailed', `Failed to send loaded latency ping: ${error}`));
     }
   };
 
@@ -120,7 +121,10 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
       } catch (error) {
         isStopped = true;
         isRunning = false;
-        throw new Error(`Failed to create loaded latency WebSocket: ${error}`);
+        throw new SpeedTestError(
+          getFailureReasonOr(error, 'connectionFailed'),
+          `Failed to create loaded latency WebSocket: ${error}`
+        );
       }
 
       socket.onopen = () => {
@@ -149,7 +153,7 @@ export function createLoadedLatencyMonitor(options: LoadedLatencyTestOptions): L
         if (isStopped) return;
         isStopped = true;
         isRunning = false;
-        failStop(new Error('WebSocket error during loaded latency test'));
+        failStop(new SpeedTestError('connectionFailed', 'WebSocket error during loaded latency test'));
         cleanup();
       };
 

@@ -1,5 +1,6 @@
 import type { SpeedTestServer } from '../types/speed-server.js';
 import type { SpeedTestTransport } from '../types/speed-test.js';
+import { SpeedTestError } from '../utils/failure.js';
 
 /**
  * Sockets for every test stage. The URL picks the transport: `ws://` and `wss://` use the
@@ -61,10 +62,13 @@ export const DEFAULT_LOCAL_SERVER_PROTOCOLS: readonly string[] = ['WSv1'];
  */
 export const FIRST_CONNECTION_TIMEOUT_MS = 3000;
 
-/** A socket failed before it opened: refused, unreachable, or not answered in time. */
-export class SocketConnectError extends Error {
-  constructor(message: string) {
-    super(message);
+/**
+ * A socket failed before it opened: refused or unreachable (`connectionFailed`), or not
+ * answered in time (`connectionTimeout`).
+ */
+export class SocketConnectError extends SpeedTestError {
+  constructor(message: string, reason: 'connectionFailed' | 'connectionTimeout' = 'connectionFailed') {
+    super(reason, message);
     this.name = 'SocketConnectError';
   }
 }
@@ -130,7 +134,8 @@ export function usesNodeWebSocket(url: string, enabled = true): boolean {
 export function openSocket(url: string, options: OpenSocketOptions = {}): WebSocket {
   const connectTimeout = options.connectTimeoutMs ? { connectTimeoutMs: options.connectTimeoutMs } : {};
   if (isTcpUrl(url)) {
-    if (!tcpTransport) throw new Error('The raw TCP transport is not loaded');
+    if (!tcpTransport) throw new SpeedTestError('unreachable', 'The raw TCP transport is not loaded');
+    // speed-transport's socket reports payload bytes as they arrive (`onpayloadprogress`).
     return new tcpTransport.SpeedTransportSocket(url, { binaryPayloads: 'discard', ...connectTimeout }) as WebSocket;
   }
   if (usesNodeWebSocket(url, options.nodeWebSocket !== false)) {
@@ -214,11 +219,13 @@ export async function selectServerUrl(
   const wss: ResolvedServerUrl = { url: getServerWebSocketUrl(server, true), protocol: 'WSS' };
 
   if (transport === 'tcp') {
-    if (!(await loadTcpTransport())) throw new Error('The raw TCP transport needs Node.js');
+    if (!(await loadTcpTransport())) throw new SpeedTestError('unreachable', 'The raw TCP transport needs Node.js');
     return { primary: tcp, fallbacks: [] };
   }
   if (transport === 'ws') {
-    if (requiresSecureWebSocket()) throw new Error('This page only allows secure WebSockets (wss://)');
+    if (requiresSecureWebSocket()) {
+      throw new SpeedTestError('unreachable', 'This page only allows secure WebSockets (wss://)');
+    }
     return { primary: ws, fallbacks: [] };
   }
   if (transport === 'wss') return { primary: wss, fallbacks: [] };
@@ -229,7 +236,10 @@ export async function selectServerUrl(
   if (protocols.includes('WSv1') && !requiresSecureWebSocket()) candidates.push(ws);
   if (protocols.includes('WSSv1')) candidates.push(wss);
   if (candidates.length === 0) {
-    throw new Error(`The server offers no transport this runtime can use (${protocols.join(', ')})`);
+    throw new SpeedTestError(
+      'unreachable',
+      `The server offers no transport this runtime can use (${protocols.join(', ')})`
+    );
   }
   return { primary: candidates[0], fallbacks: candidates.slice(1) };
 }

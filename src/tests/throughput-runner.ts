@@ -1,6 +1,11 @@
 import type { LatencyTestData, SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
-import { calculateSpeedSinceMbps, calculateStageSpeedMbps } from '../utils/speed.js';
+import { SpeedTestError } from '../utils/failure.js';
+import {
+  calculateLiveSpeedMbps,
+  calculateSpeedSinceMbps,
+  calculateStageSpeedMbps,
+} from '../utils/speed.js';
 import { createLoadedLatencyMonitor } from './loaded-latency-test.js';
 import {
   openThroughputLane,
@@ -24,6 +29,11 @@ export interface ThroughputTestOptions {
    */
   threads?: number;
   cancellationToken: CancellationToken;
+  /**
+   * Called with each snapshot, with its live `speedMbps`: like the stored snapshot's, but moving
+   * from the whole-stage speed to the measured speed over the `LIVE_SPEED_BLEND_MS` after the
+   * measurement start (see `calculateLiveSpeedMbps`), so a progress display does not jump there.
+   */
   onSnapshot?: (snapshot: SpeedSnapshot) => void;
   /** `false` opens WebSockets with `globalThis.WebSocket`, not the Node.js client. See `SpeedTestConfig.nodeWebSocket`. */
   nodeWebSocket?: boolean;
@@ -33,6 +43,13 @@ export interface ThroughputTestOptions {
 export const RAMP_UP_EXCLUSION_MS = 250;
 /** Loaded latency pings start this long after the stage's first counted bytes, once the link is loaded. */
 export const LOADED_LATENCY_DELAY_MS = 1000;
+/**
+ * A throughput stage that has counted no bytes this long after its sockets opened fails with
+ * `transferTimeout`, as in the native engines (their `transferTimeoutMs` default). A stage
+ * shorter than this that moves nothing fails the same way when it ends: a stage that moved no
+ * data did not measure the link.
+ */
+export const TRANSFER_TIMEOUT_MS = 10_000;
 
 /**
  * Runs a download or upload throughput stage: opens the lanes, starts them together once
@@ -45,6 +62,10 @@ export const LOADED_LATENCY_DELAY_MS = 1000;
  * `durationMs` from when the sockets opened. The loaded latency monitor connects at the start but
  * pings from `LOADED_LATENCY_DELAY_MS` (1 s) after the first bytes, once the link carries the
  * stage's traffic.
+ *
+ * `onSnapshot` gets the live speed, which moves from the whole-stage speed to the measured speed
+ * over the second after the measurement start; the snapshots stored in the result keep the
+ * measured speed.
  */
 export function runThroughputTest(
   direction: ThroughputDirection,
@@ -97,7 +118,26 @@ export function runThroughputTest(
         ? calculateSpeedSinceMbps(bytes, elapsed, measuredFromBytes, measuredFromMs)
         : calculateStageSpeedMbps(bytes, elapsed, latencyMs, jitterMs);
 
+    /**
+     * The live speed for `onSnapshot`: the whole-stage speed until the measurement start, then
+     * moving to `speed` over `LIVE_SPEED_BLEND_MS`. Right after the start the measured window is
+     * a few ms long, and holds no message or `ACK` at all, or a whole one: the live speed would
+     * drop to about 0 or spike.
+     */
+    const liveSpeed = (bytes: number, elapsed: number) => {
+      const stageSpeed = calculateStageSpeedMbps(bytes, elapsed, latencyMs, jitterMs);
+      if (measuredFromMs === null || elapsed <= measuredFromMs) return stageSpeed;
+      const measured = calculateSpeedSinceMbps(bytes, elapsed, measuredFromBytes, measuredFromMs);
+      return calculateLiveSpeedMbps(stageSpeed, measured, elapsed - measuredFromMs);
+    };
+
+    let transferTimer: ReturnType<typeof setTimeout> | null = null;
+    const noDataError = (afterMs: number, at: 'after' | 'in') =>
+      new SpeedTestError('transferTimeout', `No ${direction} data ${at} ${Math.round(afterMs)} ms`);
+
     const clearStageTimers = () => {
+      if (transferTimer) clearTimeout(transferTimer);
+      transferTimer = null;
       if (rampUpTimer) clearTimeout(rampUpTimer);
       rampUpTimer = null;
       if (loadedLatencyTimer) clearTimeout(loadedLatencyTimer);
@@ -129,6 +169,9 @@ export function runThroughputTest(
       if (finishTimer) clearTimeout(finishTimer);
       clearStageTimers();
       for (const lane of lanes ?? []) lane.close();
+      // Also when the stage failed: close the loaded latency socket. stop() is idempotent, so a
+      // stage that finished normally (and already awaited it) is unaffected.
+      void loadedLatencyMonitor.stop().catch(() => {});
     };
 
     const settle = (
@@ -143,7 +186,7 @@ export function runThroughputTest(
 
     const finishTest = async () => {
       if (testStartTime === null) {
-        settle(reject, new Error('Test never started'));
+        settle(reject, new SpeedTestError('transferTimeout', 'Test never started'));
         return;
       }
       finishing = true;
@@ -152,6 +195,10 @@ export function runThroughputTest(
       snapshotTimer = null;
       const elapsed = performance.now() - testStartTime;
       const bytes = totalBytes();
+      if (bytes === 0) {
+        settle(reject, noDataError(durationMs, 'in'));
+        return;
+      }
       const speedMbps = speed(bytes, elapsed);
       // The stage is over: ask for no more data (no refill goes out after the stage), but keep
       // the sockets open, so the loaded latency monitor's last ping still measures a loaded link
@@ -192,12 +239,22 @@ export function runThroughputTest(
           bytes,
         };
         snapshots.push(snapshot);
-        onSnapshot?.(snapshot);
+        if (onSnapshot) {
+          const live = liveSpeed(bytes, elapsed);
+          onSnapshot(live === snapshot.speedMbps ? snapshot : { ...snapshot, speedMbps: live });
+        }
       }, snapshotIntervalMs);
 
       finishTimer = setTimeout(() => {
         void finishTest();
       }, durationMs);
+
+      if (TRANSFER_TIMEOUT_MS < durationMs) {
+        transferTimer = setTimeout(() => {
+          transferTimer = null;
+          if (!settled && !finishing && totalBytes() === 0) settle(reject, noDataError(TRANSFER_TIMEOUT_MS, 'after'));
+        }, TRANSFER_TIMEOUT_MS);
+      }
 
       try {
         loadedLatencyMonitor.start();

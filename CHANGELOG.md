@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+Results now follow the standard result format shared by every CoverageMap client (the Android and iOS libraries, the CoverageMap app, and the Core API). Every new field is nullable and `version` stays `1`, so payloads from earlier versions stay valid.
+
+### Improvements
+
+- **Steady live speed at the measurement start**: `onDownloadProgress` and `onUploadProgress` no longer switch at once from the whole-stage speed to the measured speed 250 ms after the first bytes. The live speed now moves from one to the other over the next second. Right after the switch the measured window was only milliseconds long and held no message or `ACK`, or a whole one, so a gauge jumped there and then read about 0 or spiked for a moment. The snapshots in `SpeedTestData.snapshots` and the result, and every final speed, are unchanged. During that second a progress snapshot's `speedMbps` can differ from the stored snapshot at the same time. This matches the CoverageMap Android and iOS speed test libraries.
+- **Download bytes count as they arrive in Node.js**: Raw TCP sockets and the library's Node.js WebSocket client report each frame's bytes as they are read, so progress snapshots and the stage total also count the frames still arriving (1 to 5 MiB per socket), as the native libraries do, and the ramp-up exclusion starts from the first bytes to arrive. Before, only whole frames counted. The work is per socket read, not per byte: on loopback with 12 sockets on 6 threads, throughput and CPU per byte stayed within run-to-run variation (raw TCP about 22 Gbps, WebSocket about 33 to 35 Gbps). Browsers, and `config.nodeWebSocket: false`, still count whole frames: the WebSocket API only delivers whole messages. The bytes come from speed-transport's public payload progress hook, so this needs `@coveragemap/speed-transport` 0.3.0 (now the minimum version).
+
+### New Features
+
+- **`estimatedDownloadSpeed` and `estimatedUploadSpeed`** in `results.measurements`: the Mbps measured by each estimation stage, rounded to 3 decimals, `null` when estimation did not complete.
+- **`requestedDownloadConnectionCount`, `establishedDownloadConnectionCount`, `requestedUploadConnectionCount`, `establishedUploadConnectionCount`** in `testType`: the connections each throughput stage asked for and the ones that opened. A stage only starts once every connection is open, so the two are equal for a stage that completed; established is `null` for one that did not.
+- **`latencyEnd` stage marker** after the latency stage, and the failing phase now records its end marker too (`latencyEnd`, `downloadEnd`, or `uploadEnd`), not only `failedStage`. A cancelled run records none.
+- **`SpeedTestError`, `getFailureReason`, `formatFailedReason`, and the `SpeedTestFailureReason` type** are exported. Errors the stages raise, and pass to `onError`, carry a `reason`.
+
+### Breaking Changes
+
+- **Defaults: 15 pings and 7 s stages**: `pingCount` is 15 (was 10) and `downloadDurationMs` / `uploadDurationMs` are 7000 (were 10000), the same as the CoverageMap app and native libraries. Pass the old values in `config` to keep them.
+- **`failedReason` is `"<reason>: <message>"`** (or `"Cancelled"`), where `<reason>` is one of `unreachable`, `connectionFailed`, `connectionTimeout`, `transferTimeout`, `timeout`, `protocolError`, `unknown`, the native engine's failure reasons. It was the bare error message.
+- **`downloadConnectionCount` / `uploadConnectionCount`** are now the established count, `null` when the throughput stage did not complete (they were set once estimation finished).
+- **With the latency stage disabled, `latency`, `jitter`, and `latenciesList` are `null`**, and `onComplete` receives `null` latency data. The single ping that still runs to normalize the later stages' timing now runs inside the first download or upload phase, after its start marker, and is no longer reported as the result's latency.
+
+### Bug Fixes
+
+- **A throughput stage that moves no data fails**: A download or upload stage that counted no bytes passed with 0 Mbps. It now fails with `transferTimeout` (`"transferTimeout: No download data in 7000 ms"`), like the native engines: after 10 s with no data, or at the end of a shorter stage. The loaded latency socket of a stage that fails is now closed too.
+
+- **Upload after download on slow links against the CDN, in browsers**: The CDN server cannot reset a connection on `CLOSE`, so Cloudflare kept delivering the download frames it had queued, and a browser could only close those sockets gracefully. On a 1 Mbps link the upload stage then measured about 60% of the link (three runs: 40 to 73%), while an upload on its own measured 91%. The engine now runs the upload phase in a new stage worker and terminates the one that ran the download, which drops its sockets at once. The upload after a download now measures the same as on its own (0.90 to 0.92 Mbps, against 0.91 to 0.93). Against the Node.js servers, which reset the connection, nothing changes.
+
+- With the latency stage disabled, a failed latency normalization ping on an engine that had already run a test was reported with `failedStage: null` and `testStatus: "passed"`. It now fails the phase it runs in.
+
 ## 0.6.0
 
 ### Improvements

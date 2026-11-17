@@ -55,12 +55,16 @@ import { FIRST_CONNECTION_TIMEOUT_MS, SocketConnectError, selectServerUrl } from
 import { createStageRunner } from './browser/stage-worker-client.js';
 import type { StageRunner } from './browser/stage-runner.js';
 import { roundTo3Decimals } from './utils/speed.js';
+import { formatFailedReason } from './utils/failure.js';
 import type { ApiBaseUrlOverrides } from './api/config.js';
 import { SpeedTestApiClient } from './api/speed-api.js';
 import { CoverageMapApiClient } from './api/coveragemap-api.js';
 import { assertUploadBaseUrl } from './api/config.js';
 
 const DEFAULT_RESULTS_QUEUE_KEY = 'coveragemap-test-results-queue';
+
+/** A part of the test with `<phase>Start` and `<phase>End` stage markers. */
+type TestPhase = 'latency' | 'download' | 'upload';
 
 export interface SpeedTestEngineApplicationInfo {
   id: string;
@@ -202,9 +206,11 @@ export class SpeedTestEngine {
     let uploadEstimation: SpeedEstimationResult | null = null;
     let downloadResult: SpeedTestData | null = null;
     let uploadResult: SpeedTestData | null = null;
-    let downloadConnectionCount: number | null = null;
+    let requestedDownloadConnectionCount: number | null = null;
+    let establishedDownloadConnectionCount: number | null = null;
     let downloadMessageSizeKb: number | null = null;
-    let uploadConnectionCount: number | null = null;
+    let requestedUploadConnectionCount: number | null = null;
+    let establishedUploadConnectionCount: number | null = null;
     let uploadMessageSizeKb: number | null = null;
     let failedReason: string | null = null;
     let failedStage: string | null = null;
@@ -235,7 +241,7 @@ export class SpeedTestEngine {
       const cancellationToken = this.cancellationToken;
       // In browsers the stages run in a Web Worker, away from the page's rendering.
       runner = await createStageRunner(this.config.browserWorker !== false);
-      const stageRunner = runner;
+      let stageRunner = runner;
 
       /**
        * Runs the first stage that connects. If its socket cannot open within
@@ -279,11 +285,48 @@ export class SpeedTestEngine {
         };
       };
 
+      /** The phase whose start marker was recorded and whose end marker was not, if any. */
+      let openPhase: TestPhase | null = null;
+      const startPhase = async (phase: TestPhase) => {
+        stages.push(await buildStage(`${phase}Start`));
+        openPhase = phase;
+      };
+      const endPhase = async () => {
+        if (!openPhase) return;
+        const phase = openPhase;
+        openPhase = null;
+        stages.push(await buildStage(`${phase}End`));
+      };
+
+      /**
+       * With the latency stage off, one ping still measures the latency the later stages
+       * subtract from their timing. It belongs to the first download or upload phase, like in
+       * the native engine, and is not reported as the result's latency.
+       */
+      let latencyMs = 0;
+      let jitterMs = 0;
+      let latencyMeasured = false;
+      const normalizeLatency = async () => {
+        if (latencyMeasured) return;
+        latencyMeasured = true;
+        const probe = await firstConnection((url, connectTimeoutMs) =>
+          stageRunner.runLatencyTest({
+            serverUrl: url,
+            nodeWebSocket,
+            pingCount: 1,
+            connectTimeoutMs,
+            cancellationToken,
+          })
+        );
+        latencyMs = probe.minLatency;
+        jitterMs = probe.minJitter;
+      };
+
       try {
         if (this.tests.latency) {
           this.setStage('latency');
-          stages.push(await buildStage('latencyStart'));
-          latencyData = await firstConnection((url, connectTimeoutMs) =>
+          await startPhase('latency');
+          const measured = await firstConnection((url, connectTimeoutMs) =>
             stageRunner.runLatencyTest({
               serverUrl: url,
               nodeWebSocket,
@@ -294,25 +337,18 @@ export class SpeedTestEngine {
               onPing: (latencyMs, index) => this.callbacks.onLatencyPing?.(latencyMs, index),
             })
           );
-          this.callbacks.onLatencyResult?.(latencyData);
-        } else if (this.tests.download || this.tests.upload) {
-          latencyData = await firstConnection((url, connectTimeoutMs) =>
-            stageRunner.runLatencyTest({
-              serverUrl: url,
-              nodeWebSocket,
-              pingCount: 1,
-              connectTimeoutMs,
-              cancellationToken,
-            })
-          );
+          latencyData = measured;
+          latencyMs = measured.minLatency;
+          jitterMs = measured.minJitter;
+          latencyMeasured = true;
+          this.callbacks.onLatencyResult?.(measured);
+          await endPhase();
         }
-
-        const latencyMs = latencyData?.minLatency ?? 0;
-        const jitterMs = latencyData?.minJitter ?? 0;
 
         if (this.tests.download) {
           this.setStage('downloadEstimation');
-          stages.push(await buildStage('downloadStart'));
+          await startPhase('download');
+          await normalizeLatency();
           downloadEstimation = await stageRunner.runDownloadEstimationTest({
             serverUrl,
             nodeWebSocket,
@@ -323,12 +359,12 @@ export class SpeedTestEngine {
           });
           this.setStage('download');
           downloadMessageSizeKb = getDownloadMessageSizeKb(downloadEstimation.speedMbps);
-          downloadConnectionCount = getDownloadConnectionCount(downloadEstimation.speedMbps);
+          requestedDownloadConnectionCount = getDownloadConnectionCount(downloadEstimation.speedMbps);
           downloadResult = await stageRunner.runDownloadSpeedTest({
             serverUrl,
             nodeWebSocket,
             messageSizeKb: downloadMessageSizeKb,
-            connectionCount: downloadConnectionCount,
+            connectionCount: requestedDownloadConnectionCount,
             durationMs: this.config.downloadDurationMs,
             latencyMs,
             jitterMs,
@@ -340,17 +376,41 @@ export class SpeedTestEngine {
             cancellationToken: this.cancellationToken,
             onSnapshot: (snapshot) => this.callbacks.onDownloadProgress?.(snapshot),
           });
+          // A throughput stage only starts once every one of its connections is open.
+          establishedDownloadConnectionCount = requestedDownloadConnectionCount;
           this.callbacks.onDownloadResult?.(downloadResult);
-          stages.push(await buildStage('downloadEnd'));
+          await endPhase();
         }
 
         if (this.tests.upload) {
           if (this.tests.download) {
-            await this.delay(500);
+            /*
+             * The download sockets sent CLOSE, but a browser can only close a WebSocket
+             * gracefully, and the CDN server (a Cloudflare Worker) cannot reset the connection:
+             * it closes cleanly and Cloudflare still delivers the frames it already queued. On
+             * slow links those frames kept the downlink busy and starved the upload's ACKs: at
+             * 1 Mbps the upload measured about 60% of the link. Terminating the stage worker
+             * that owns the download sockets drops them at once, like the native clients' hard
+             * close, so the upload runs in a new worker. Starting it overlaps the cooldown.
+             */
+            const restartWorker = async () => {
+              if (stageRunner.mode !== 'worker') return;
+              stageRunner.close();
+              runner = stageRunner = await createStageRunner(true);
+            };
+            const restarting = restartWorker();
+            try {
+              await this.delay(500);
+            } finally {
+              // Also when the cooldown is cancelled: the new worker must be assigned to `runner`
+              // before the run's `finally` closes it, or nothing would ever terminate it.
+              await restarting;
+            }
           }
 
           this.setStage('uploadEstimation');
-          stages.push(await buildStage('uploadStart'));
+          await startPhase('upload');
+          await normalizeLatency();
           uploadEstimation = await stageRunner.runUploadEstimationTest({
             serverUrl,
             nodeWebSocket,
@@ -361,12 +421,12 @@ export class SpeedTestEngine {
           });
           this.setStage('upload');
           uploadMessageSizeKb = getUploadMessageSizeKb(uploadEstimation.speedMbps);
-          uploadConnectionCount = getUploadConnectionCount(uploadEstimation.speedMbps);
+          requestedUploadConnectionCount = getUploadConnectionCount(uploadEstimation.speedMbps);
           uploadResult = await stageRunner.runUploadSpeedTest({
             serverUrl,
             nodeWebSocket,
             messageSizeKb: uploadMessageSizeKb,
-            connectionCount: uploadConnectionCount,
+            connectionCount: requestedUploadConnectionCount,
             durationMs: this.config.uploadDurationMs,
             latencyMs,
             jitterMs,
@@ -378,8 +438,9 @@ export class SpeedTestEngine {
             cancellationToken: this.cancellationToken,
             onSnapshot: (snapshot) => this.callbacks.onUploadProgress?.(snapshot),
           });
+          establishedUploadConnectionCount = requestedUploadConnectionCount;
           this.callbacks.onUploadResult?.(uploadResult);
-          stages.push(await buildStage('uploadEnd'));
+          await endPhase();
         }
       } catch (error) {
         if (error instanceof CancellationError) {
@@ -387,8 +448,15 @@ export class SpeedTestEngine {
           failedReason = 'Cancelled';
           failedStage = this._stage;
         } else {
-          failedReason = error instanceof Error ? error.message : String(error);
-          failedStage = this.mapStageToTestStage(this._stage);
+          failedReason = formatFailedReason(error);
+          const phase: TestPhase | null = openPhase;
+          failedStage = phase ? `${phase}Start` : this.mapStageToTestStage(this._stage);
+          // The failed phase ended too: record its end marker, like a phase that passed.
+          try {
+            await endPhase();
+          } catch {
+            // A provider that fails here must not lose the result
+          }
           this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)), this._stage);
         }
       }
@@ -410,9 +478,11 @@ export class SpeedTestEngine {
         downloadResult,
         uploadEstimation,
         uploadResult,
-        downloadConnectionCount,
+        requestedDownloadConnectionCount,
+        establishedDownloadConnectionCount,
         downloadMessageSizeKb,
-        uploadConnectionCount,
+        requestedUploadConnectionCount,
+        establishedUploadConnectionCount,
         uploadMessageSizeKb,
         testProtocol,
         stages,
@@ -522,9 +592,11 @@ export class SpeedTestEngine {
     downloadResult: SpeedTestData | null;
     uploadEstimation: SpeedEstimationResult | null;
     uploadResult: SpeedTestData | null;
-    downloadConnectionCount: number | null;
+    requestedDownloadConnectionCount: number | null;
+    establishedDownloadConnectionCount: number | null;
     downloadMessageSizeKb: number | null;
-    uploadConnectionCount: number | null;
+    requestedUploadConnectionCount: number | null;
+    establishedUploadConnectionCount: number | null;
     uploadMessageSizeKb: number | null;
     testProtocol: string;
     stages: NetworkTestResultStage[];
@@ -546,6 +618,14 @@ export class SpeedTestEngine {
       wired: params.network.wired,
       measurements: {
         dateTime: params.startTime.toISOString(),
+        estimatedDownloadSpeed:
+          params.downloadEstimation?.speedMbps != null
+            ? roundTo3Decimals(params.downloadEstimation.speedMbps)
+            : null,
+        estimatedUploadSpeed:
+          params.uploadEstimation?.speedMbps != null
+            ? roundTo3Decimals(params.uploadEstimation.speedMbps)
+            : null,
         downloadSpeed:
           params.downloadResult?.speedMbps != null
             ? roundTo3Decimals(params.downloadResult.speedMbps)
@@ -601,8 +681,12 @@ export class SpeedTestEngine {
         downloadTestDuration: params.testsRun.download ? this.config.downloadDurationMs : null,
         uploadTestDuration: params.testsRun.upload ? this.config.uploadDurationMs : null,
         testProtocol: params.testProtocol,
-        downloadConnectionCount: params.downloadConnectionCount,
-        uploadConnectionCount: params.uploadConnectionCount,
+        downloadConnectionCount: params.establishedDownloadConnectionCount,
+        uploadConnectionCount: params.establishedUploadConnectionCount,
+        requestedDownloadConnectionCount: params.requestedDownloadConnectionCount,
+        establishedDownloadConnectionCount: params.establishedDownloadConnectionCount,
+        requestedUploadConnectionCount: params.requestedUploadConnectionCount,
+        establishedUploadConnectionCount: params.establishedUploadConnectionCount,
         downloadPacketSize: params.downloadMessageSizeKb,
         uploadPacketSize: params.uploadMessageSizeKb,
       },

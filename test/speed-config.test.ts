@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_CONFIG,
   getDownloadConnectionCount,
   getDownloadMessageSizeKb,
   getUploadConnectionCount,
@@ -10,6 +11,14 @@ import {
   getSpeedApiBaseUrl,
   type ApiBaseUrlOverrides,
 } from '../src/api/config.js';
+
+describe('default config', () => {
+  it('uses the CoverageMap standard of 15 pings and 7 s download and upload stages', () => {
+    expect(DEFAULT_CONFIG.pingCount).toBe(15);
+    expect(DEFAULT_CONFIG.downloadDurationMs).toBe(7000);
+    expect(DEFAULT_CONFIG.uploadDurationMs).toBe(7000);
+  });
+});
 
 describe('speed-test thresholds', () => {
   it('maps estimated download speed to packet size and connections', () => {

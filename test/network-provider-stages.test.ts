@@ -94,6 +94,7 @@ describe('network provider — stage boundaries', () => {
 
     expect(result.stages?.map((s) => s.testStage)).toEqual([
       'latencyStart',
+      'latencyEnd',
       'downloadStart',
       'downloadEnd',
       'uploadStart',
@@ -101,7 +102,7 @@ describe('network provider — stage boundaries', () => {
     ]);
   });
 
-  it('calls network provider once per stage boundary — 5 boundaries + 1 initial = 6 total', async () => {
+  it('calls network provider once per stage boundary — 6 boundaries + 1 initial = 7 total', async () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
     const engine = new SpeedTestEngine({ application: applicationMetadata });
 
@@ -110,9 +111,9 @@ describe('network provider — stage boundaries', () => {
 
     await engine.run(testServer);
 
-    // 1 initial acquireNetwork + 5 stage boundaries (latencyStart, downloadStart,
+    // 1 initial acquireNetwork + 6 stage boundaries (latencyStart, latencyEnd, downloadStart,
     // downloadEnd, uploadStart, uploadEnd)
-    expect(getWifiMetadata).toHaveBeenCalledTimes(6);
+    expect(getWifiMetadata).toHaveBeenCalledTimes(7);
   });
 
   it('stamps fresh network data on latencyStart', async () => {
@@ -188,7 +189,7 @@ describe('network provider — stage boundaries', () => {
     expect(result.results.wifi?.ssidName).toBe(uploadEnd?.wifi?.ssidName);
   });
 
-  it('latency-only run: 1 stage boundary (latencyStart), 2 total provider calls', async () => {
+  it('latency-only run: 2 stage boundaries (latencyStart, latencyEnd), 3 total provider calls', async () => {
     const { SpeedTestEngine } = await import('../src/engine.js');
     const engine = new SpeedTestEngine({
       application: applicationMetadata,
@@ -200,8 +201,8 @@ describe('network provider — stage boundaries', () => {
 
     const result = await engine.run(testServer);
 
-    expect(result.stages?.map((s) => s.testStage)).toEqual(['latencyStart']);
-    expect(getWifiMetadata).toHaveBeenCalledTimes(2); // 1 initial + 1 latencyStart
+    expect(result.stages?.map((s) => s.testStage)).toEqual(['latencyStart', 'latencyEnd']);
+    expect(getWifiMetadata).toHaveBeenCalledTimes(3); // 1 initial + latencyStart + latencyEnd
   });
 
   it('download-only run: downloadStart + downloadEnd boundaries, 3 total provider calls', async () => {

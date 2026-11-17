@@ -2,6 +2,7 @@ import type { SpeedEstimationResult } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { calculateSpeedMbps } from '../utils/speed.js';
 import { createStallMonitor } from '../utils/stall-monitor.js';
+import { SpeedTestError, getFailureReasonOr } from '../utils/failure.js';
 import { SOCKET_CLOSED, openSocket } from './sockets.js';
 
 export interface DownloadEstimationTestOptions {
@@ -63,7 +64,8 @@ export async function runDownloadEstimationTest(
     timeoutId = setTimeout(() => {
       settle(
         reject,
-        new Error(
+        new SpeedTestError(
+          didConnect ? 'timeout' : 'connectionTimeout',
           `Download estimation timed out after ${timeoutMs}ms. Connected: ${didConnect}, Retries: ${retries}`
         )
       );
@@ -80,7 +82,7 @@ export async function runDownloadEstimationTest(
       socket = openSocket(serverUrl, { nodeWebSocket });
       socket.binaryType = 'arraybuffer';
     } catch (error) {
-      reject(new Error(`Failed to create WebSocket: ${error}`));
+      reject(new SpeedTestError(getFailureReasonOr(error, 'connectionFailed'), `Failed to create WebSocket: ${error}`));
       return;
     }
 
@@ -139,11 +141,11 @@ export async function runDownloadEstimationTest(
             socket.onerror = handleError;
             socket.onclose = handleClose;
           } catch (error) {
-            settle(reject, new Error(`Failed to reconnect: ${error}`));
+            settle(reject, new SpeedTestError(getFailureReasonOr(error, 'connectionFailed'), `Failed to reconnect: ${error}`));
           }
         }, 1000);
       } else {
-        settle(reject, new Error('Download estimation failed after retries'));
+        settle(reject, new SpeedTestError('connectionFailed', 'Download estimation failed after retries'));
       }
     };
 
