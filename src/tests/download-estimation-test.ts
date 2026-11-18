@@ -148,6 +148,8 @@ export async function runDownloadEstimationTest(
       if (settled) return;
       if (retries < MAX_RETRIES) {
         retries++;
+        // The time cap measures rounds, not reconnects: it starts again with the next round
+        firstRoundAt = null;
         setTimeout(() => {
           if (settled) return;
           try {

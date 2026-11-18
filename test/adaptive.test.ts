@@ -15,6 +15,7 @@ import {
   nearestSizeKb,
   nextEstimationBytes,
   nextEstimationStep,
+  stalledEstimationRounds,
   type EstimationRound,
 } from '../src/utils/adaptive.js';
 
@@ -64,6 +65,19 @@ describe('estimation rounds', () => {
     expect(nextEstimationStep([round(90, 8), round(270, 6)], 500)).toBe('stop');
     // At 3 Mbps it fell under half: a stall, grow
     expect(nextEstimationStep([round(90, 8), round(270, 3)], 900)).toBe('grow');
+  });
+
+  it('compare each round with the fastest earlier round that did not stall', () => {
+    // 900 Mbps with 200 ms recoveries in three rounds in a row
+    const rounds = [round(10, 900), round(30, 900), round(90, 900, 200), round(270, 900, 200), round(810, 900, 200)];
+    expect(stalledEstimationRounds(rounds)).toEqual([false, false, true, true, true]);
+    // Against one another the third stall (32 → 90 Mbps) would look clean; against the clean
+    // rounds it stalled, so estimation goes on
+    expect(nextEstimationStep(rounds, 700)).toBe('grow');
+    // When the last three rounds all stalled, the estimate is the fastest clean round
+    expect(estimationReference(rounds)).toBe(rounds[1]);
+    // A first slow round is never a stall, and is the baseline until a faster clean round
+    expect(stalledEstimationRounds([round(10, 0.1), round(30, 0.1)])).toEqual([false, false]);
   });
 
   it('stop at 5 MiB when the round is short, and repeat it when it stalled', () => {

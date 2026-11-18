@@ -62,5 +62,6 @@ export {
   getFirstDownloadMessageSizeKb,
   getUploadChunkSizeForSpeedKb,
   nextEstimationStep,
+  stalledEstimationRounds,
 } from './adaptive.js';
 export type { EstimationRound, EstimationStep } from './adaptive.js';

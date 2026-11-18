@@ -100,6 +100,49 @@ async function run(direction: 'download' | 'upload') {
   return { result, tookMs };
 }
 
+/** Fails 50 ms after its first START, without answering, for the first `failures` sockets. */
+class FlakyLinkSocketMock extends LinkSocketMock {
+  static failures = 0;
+  private readonly fails = FlakyLinkSocketMock.failures-- > 0;
+
+  send(payload: string | Uint8Array): void {
+    if (!this.fails) return super.send(payload);
+    if (typeof payload === 'string' && payload.startsWith('START')) {
+      LinkSocketMock.starts.push(payload);
+      setTimeout(() => {
+        this.readyState = LinkSocketMock.CLOSED;
+        this.onerror?.(new Event('error'));
+      }, 50);
+    }
+  }
+}
+
+describe('download estimation after reconnecting', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] });
+    LinkSocketMock.starts = [];
+    link.stalls = new Map();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('starts its 2 s window again with the connection that measures', async () => {
+    // Two connections fail after their first START (1 s between retries): the 2 s cap must not
+    // already have passed when the third one's first 10 KiB round arrives
+    FlakyLinkSocketMock.failures = 2;
+    vi.stubGlobal('WebSocket', FlakyLinkSocketMock as unknown as typeof WebSocket);
+    Object.assign(link, { roundTripMs: 20, mbps: 940 });
+    const promise = estimate('download');
+    await vi.advanceTimersByTimeAsync(20_000);
+    const result = await promise;
+    expect(result.bytes).toBeGreaterThan(10 * 1024);
+    expect(result.speedMbps).toBeGreaterThan(800);
+  });
+});
+
 describe.each(['download', 'upload'] as const)('%s estimation on a simulated link', (direction) => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] });
@@ -122,6 +165,13 @@ describe.each(['download', 'upload'] as const)('%s estimation on a simulated lin
     expect(result.speedMbps).toBeGreaterThan(900);
     expect(sizes().at(-1)).toBe(5120);
     expect(sizes()[1] / sizes()[0]).toBe(3);
+  });
+
+  it('compares stalls in a row with the last clean round, not with one another', async () => {
+    // Three 200 ms recoveries in a row: each stall must be measured against the clean speed
+    Object.assign(link, { roundTripMs: 57, mbps: 900, stalls: new Map([[3, 200], [4, 200], [5, 200]]) });
+    const { result } = await run(direction);
+    expect(result.speedMbps).toBeGreaterThan(800);
   });
 
   it('goes on past rounds that stalled on a lost packet, instead of settling on them', async () => {

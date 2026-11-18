@@ -52,24 +52,54 @@ export function nextEstimationBytes(bytes: number): number {
 }
 
 /**
- * The fastest of the last `ESTIMATION_REFERENCE_ROUNDS` rounds. Small rounds are left out once
- * there are larger ones: a round of a few KB takes only milliseconds beyond the latency, so a
- * millisecond of jitter can make it read several times too fast, and larger rounds say more
- * about the link.
+ * Which rounds stalled, in order. A round of `ESTIMATION_TARGET_MS` or more that ran under
+ * `STALLED_ROUND_RATIO` of the fastest earlier round that didn't stall (the clean baseline)
+ * stalled, most likely on a lost packet whose recovery took a round trip or a retransmission
+ * timeout. The first round never counts as stalled: there is nothing to compare it with. The
+ * baseline leaves stalled rounds out, so several stalls in a row are each compared with the last
+ * clean speed, not with one another: compared with a window of the last rounds, three 200 ms
+ * recoveries in a row on a 900 Mbps link made the third one look clean at about 90 Mbps.
+ */
+export function stalledEstimationRounds(rounds: readonly EstimationRound[]): boolean[] {
+  const stalled: boolean[] = [];
+  let baseline: EstimationRound | null = null;
+  for (const round of rounds) {
+    const isStalled =
+      baseline !== null &&
+      round.durationMs >= ESTIMATION_TARGET_MS &&
+      round.speedMbps < baseline.speedMbps * STALLED_ROUND_RATIO;
+    stalled.push(isStalled);
+    if (!isStalled && (!baseline || round.speedMbps > baseline.speedMbps)) baseline = round;
+  }
+  return stalled;
+}
+
+/** The fastest of `rounds`, or null for none. */
+function fastest(rounds: readonly EstimationRound[]): EstimationRound | null {
+  let best: EstimationRound | null = null;
+  for (const round of rounds) if (!best || round.speedMbps > best.speedMbps) best = round;
+  return best;
+}
+
+/**
+ * The estimate: the fastest of the last `ESTIMATION_REFERENCE_ROUNDS` rounds that didn't stall,
+ * or, when all of those stalled, the fastest round that didn't stall (then the fastest round).
+ * Small rounds are left out once there are larger ones: a round of a few KB takes only
+ * milliseconds beyond the latency, so a millisecond of jitter can make it read several times too
+ * fast, and larger rounds say more about the link.
  */
 export function estimationReference(rounds: readonly EstimationRound[]): EstimationRound | null {
-  let best: EstimationRound | null = null;
-  for (const round of rounds.slice(-ESTIMATION_REFERENCE_ROUNDS)) {
-    if (!best || round.speedMbps > best.speedMbps) best = round;
-  }
-  return best;
+  const stalled = stalledEstimationRounds(rounds);
+  const clean = rounds.filter((_, i) => !stalled[i]);
+  const first = rounds.length - ESTIMATION_REFERENCE_ROUNDS;
+  return fastest(rounds.filter((_, i) => i >= first && !stalled[i])) ?? fastest(clean) ?? fastest(rounds);
 }
 
 export type EstimationStep = 'grow' | 'repeat' | 'stop';
 
 /**
  * What estimation does after a round, given every round so far (the last one included) and how
- * long ago the first round started:
+ * long ago the first round started (on the connection that measured them):
  *
  * - `stop` once `ESTIMATION_TIME_CAP_MS` have passed;
  * - a round under `ESTIMATION_TARGET_MS`: `grow`, or `stop` at the 5 MiB cap;
@@ -77,12 +107,11 @@ export type EstimationStep = 'grow' | 'repeat' | 'stop';
  *   slow first round can't tell a slow link from one that stalled: an upload estimate on a 300 ms
  *   path read 0.1 Mbps after its first 5 KB took a round trip longer. Only links under about
  *   0.8 Mbps take that long for the first round, so only they pay the second round;
- * - a round of `ESTIMATION_TARGET_MS` or more that reached half the reference speed is clean:
- *   `stop`;
- * - a slower one stalled, most likely on a lost packet whose recovery took a round trip or a
- *   retransmission timeout: `grow` (or `repeat` at the cap). Asking for more data can't make a
- *   link slower, and a larger round spreads the recovery over more data. Stopping there had
- *   made a 940 Mbps link with 1% loss estimate 1 to 90 Mbps.
+ * - a round of `ESTIMATION_TARGET_MS` or more that didn't stall (see `stalledEstimationRounds`)
+ *   is clean: `stop`;
+ * - a round that stalled: `grow` (or `repeat` at the cap). Asking for more data can't make a link
+ *   slower, and a larger round spreads the recovery over more data. Stopping there had made a
+ *   940 Mbps link with 1% loss estimate 1 to 90 Mbps.
  */
 export function nextEstimationStep(
   rounds: readonly EstimationRound[],
@@ -93,8 +122,7 @@ export function nextEstimationStep(
   const atCap = round.bytes >= MAX_ESTIMATION_BYTES;
   if (round.durationMs < ESTIMATION_TARGET_MS) return atCap ? 'stop' : 'grow';
   if (rounds.length === 1 && !atCap) return 'grow';
-  const reference = estimationReference(rounds)!;
-  if (round.speedMbps >= reference.speedMbps * STALLED_ROUND_RATIO) return 'stop';
+  if (!stalledEstimationRounds(rounds)[rounds.length - 1]) return 'stop';
   return atCap ? 'repeat' : 'grow';
 }
 

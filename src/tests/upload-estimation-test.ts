@@ -101,6 +101,8 @@ export async function runUploadEstimationTest(
       } catch (error) {
         if (retries < MAX_RETRIES) {
           retries++;
+          // The time cap measures rounds, not retries: it starts again with the next round
+          firstRoundAt = null;
           setTimeout(() => sendChunks(), 1000);
         } else {
           settle(reject, new SpeedTestError('connectionFailed', `Failed to send upload data: ${error}`));
