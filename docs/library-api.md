@@ -926,6 +926,9 @@ interface SpeedTestData {
   bytes: number;
   snapshots: SpeedSnapshot[];
   loadedLatency: LatencyTestData | null;
+  initialConnectionCount: number;
+  requestedConnectionCount: number;
+  connectionCount: number;
 }
 ```
 
@@ -936,6 +939,9 @@ interface SpeedTestData {
 | `bytes` | `number` | Total bytes transferred during the stage. |
 | `snapshots` | `SpeedSnapshot[]` | All progress snapshots collected during the stage. |
 | `loadedLatency` | `LatencyTestData \| null` | Latency measurements collected concurrently while throughput was saturated. `null` if no pings were completed during the stage, including a stage that ended less than 1 s after its first bytes. |
+| `initialConnectionCount` | `number` | Connections the stage started with, picked from its estimate. |
+| `requestedConnectionCount` | `number` | Connections the stage asked for: the initial ones and the ones its scale-up added. At 1, 2, and 3 s after the first bytes, a stage whose speed over the last 500 ms calls for more connections (with a 25% margin) opens them; see [Scale-up](./protocol.md#scale-up). After a scale-up `speedMbps` is measured from 250 ms after the added connections carried data. |
+| `connectionCount` | `number` | Connections that carried the stage: the initial ones and the added ones that opened. This is the result's `downloadConnectionCount` / `uploadConnectionCount`. |
 
 `loadedLatency` is measured by sending PING/PONG probes, 500 ms apart, over a dedicated connection that opens when the download or upload stage starts. The first probe waits until the link carries the stage's traffic: 1 s after the stage's first counted bytes (the first `ACK`, for upload), independent of the 250 ms ramp-up exclusion of the speed. Because the link is under load during these probes, the values reflect real-world latency under congestion — sometimes called "bufferbloat" or "under-load latency" — rather than the idle RTT captured by the pre-test latency stage. Compare it against the pre-test [`LatencyTestData`](#latencytestdata) from `onLatencyResult` to quantify how much latency increases when the connection is saturated.
 

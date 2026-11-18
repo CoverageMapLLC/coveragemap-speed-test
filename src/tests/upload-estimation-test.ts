@@ -1,7 +1,15 @@
 import type { SpeedEstimationResult } from '../types/speed-test.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { SpeedTestError, getFailureReasonOr } from '../utils/failure.js';
-import { calculateSpeedMbps } from '../utils/speed.js';
+import {
+  ESTIMATION_TARGET_MS,
+  UPLOAD_ESTIMATION_START_BYTES,
+  estimationReference,
+  measureEstimationRound,
+  nextEstimationBytes,
+  nextEstimationStep,
+  type EstimationRound,
+} from '../utils/adaptive.js';
 import { createStallMonitor } from '../utils/stall-monitor.js';
 import { SOCKET_CLOSED, openSocket, sendZeroFilled } from './sockets.js';
 
@@ -15,8 +23,6 @@ export interface UploadEstimationTestOptions {
   nodeWebSocket?: boolean;
 }
 
-const TARGET_DURATION_MS = 100;
-const MAX_MESSAGE_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_CHUNK_SIZE = 1024 * 1024;
 const MAX_RETRIES = 3;
 /** Times a round that ran while the thread was blocked is repeated before it is used. */
@@ -29,8 +35,11 @@ export async function runUploadEstimationTest(
 
   return new Promise<SpeedEstimationResult>((resolve, reject) => {
     let socket: WebSocket;
-    let bytes = 5 * 1024;
+    let bytes = UPLOAD_ESTIMATION_START_BYTES;
     let startTime: number | null = null;
+    /** When the first round started: estimation settles `ESTIMATION_TIME_CAP_MS` after it. */
+    let firstRoundAt: number | null = null;
+    const rounds: EstimationRound[] = [];
     let retries = 0;
     let didConnect = false;
     let settled = false;
@@ -79,6 +88,7 @@ export async function runUploadEstimationTest(
       receivedAcks = 0;
       targetAcks = megabyteChunks + (lastChunkSize > 0 ? 1 : 0);
       startTime = performance.now();
+      firstRoundAt ??= startTime;
       stallMonitor.reset();
 
       try {
@@ -118,29 +128,32 @@ export async function runUploadEstimationTest(
       receivedAcks++;
       if (receivedAcks < targetAcks) return;
 
-      const rawDurationMs = now - startTime;
-      const adjustedMs = rawDurationMs - (latencyMs + jitterMs);
+      const round = measureEstimationRound(bytes, now - startTime, latencyMs, jitterMs);
 
-      if (adjustedMs < TARGET_DURATION_MS && bytes < MAX_MESSAGE_SIZE_BYTES) {
-        bytes *= 2;
-        sendChunks();
-        return;
-      }
-
-      // A slow round ends the estimation, so check that the network was what made it slow.
-      // If the thread was blocked (an application rendering between stages, for example),
-      // the ACKs were handled late: repeat the same size rather than settle on a far too
-      // small estimate.
-      if (stallMonitor.stalled() && stalledRepeats < MAX_STALLED_ROUND_REPEATS) {
+      // A slow round counts only if the network made it slow. If the thread was blocked (an
+      // application rendering between stages, for example), the ACKs were handled late: repeat
+      // the same size rather than read the delay as the link's speed.
+      if (
+        round.durationMs >= ESTIMATION_TARGET_MS &&
+        stallMonitor.stalled() &&
+        stalledRepeats < MAX_STALLED_ROUND_REPEATS
+      ) {
         stalledRepeats++;
         sendChunks();
         return;
       }
 
-      const durationMs = Math.max(adjustedMs, 1);
-      const speedMbps = calculateSpeedMbps(bytes, durationMs);
+      rounds.push(round);
+      const step = nextEstimationStep(rounds, now - (firstRoundAt ?? now));
+      if (step === 'grow') bytes = nextEstimationBytes(bytes);
+      if (step !== 'stop') {
+        sendChunks();
+        return;
+      }
 
-      settle(resolve, { durationMs, bytes, speedMbps });
+      // The fastest of the last rounds: see estimationReference
+      const best = estimationReference(rounds)!;
+      settle(resolve, { durationMs: best.durationMs, bytes: best.bytes, speedMbps: best.speedMbps });
     };
 
     socket.onerror = () => {

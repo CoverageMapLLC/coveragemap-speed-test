@@ -51,3 +51,16 @@ export type {
   SpeedTestNetworkSource,
   ResolvedSpeedTestNetwork,
 } from './network-provider.js';
+export {
+  DOWNLOAD_BATCH_MESSAGES,
+  DOWNLOAD_MESSAGE_SIZES_KB,
+  ESTIMATION_TIME_CAP_MS,
+  MESSAGE_TARGET_MS,
+  UPLOAD_CHUNK_SIZES_KB,
+  estimationReference,
+  getDownloadMessageSizeForSpeedKb,
+  getFirstDownloadMessageSizeKb,
+  getUploadChunkSizeForSpeedKb,
+  nextEstimationStep,
+} from './adaptive.js';
+export type { EstimationRound, EstimationStep } from './adaptive.js';

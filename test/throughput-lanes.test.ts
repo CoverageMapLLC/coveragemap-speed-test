@@ -163,7 +163,7 @@ describe('upload lane', () => {
     lane.close();
 
     for (const socket of UploadSocketMock.instances) {
-      expect(socket.commands).toEqual(['START 64 500', 'CLOSE']);
+      expect(socket.commands).toEqual(['START 64 200', 'CLOSE']);
       expect(socket.readyState).toBe(UploadSocketMock.CLOSED);
     }
   });

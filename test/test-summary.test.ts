@@ -25,6 +25,9 @@ describe('test summary selection', () => {
         bytes: 4_000_000,
         snapshots: [],
         loadedLatency: { ...mockLoadedLatency, medianLatency: 45 },
+        initialConnectionCount: 4,
+        requestedConnectionCount: 4,
+        connectionCount: 4,
       },
       uploadResult: {
         durationMs: 2000,
@@ -32,6 +35,9 @@ describe('test summary selection', () => {
         bytes: 2_000_000,
         snapshots: [],
         loadedLatency: { ...mockLoadedLatency, medianLatency: 52 },
+        initialConnectionCount: 4,
+        requestedConnectionCount: 4,
+        connectionCount: 4,
       },
     });
 

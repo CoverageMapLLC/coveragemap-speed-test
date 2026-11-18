@@ -145,7 +145,7 @@ describe('openWorkerLanes', () => {
 
       for (const lane of lanes!) lane.start();
       await vi.advanceTimersByTimeAsync(5);
-      expect(LaneSocketMock.instances.map((socket) => socket.sent)).toEqual(Array(4).fill(['START 2 500']));
+      expect(LaneSocketMock.instances.map((socket) => socket.sent)).toEqual(Array(4).fill(['START 2 200']));
       // Each lane's two sockets received one 2 KiB frame, read through the shared counters.
       expect(lanes!.map((lane) => lane.bytes)).toEqual([4096, 4096]);
 

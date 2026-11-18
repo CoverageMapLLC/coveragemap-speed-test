@@ -167,6 +167,8 @@ interface NetworkTestResultTestType {
   testProtocol: string;
   downloadConnectionCount: number | null;
   uploadConnectionCount: number | null;
+  initialDownloadConnectionCount?: number | null;
+  initialUploadConnectionCount?: number | null;
   requestedDownloadConnectionCount: number | null;
   establishedDownloadConnectionCount: number | null;
   requestedUploadConnectionCount: number | null;
@@ -184,10 +186,11 @@ Frequently used fields:
 - `testsRun`: flags indicating which of the three test phases (latency, download, upload) were enabled for this run
 - `downloadTestDuration` and `uploadTestDuration`: `null` when the corresponding test was not enabled
 - `testProtocol`: the transport the stages ran over: `TCP` (raw TCP, Node.js only), `WS` (WebSocket), or `WSS` (secure WebSocket, used on HTTPS pages and for servers that offer nothing else). See `config.transport`
-- `requestedDownloadConnectionCount` and `requestedUploadConnectionCount`: the connections the throughput stage asked for, from the estimate (1, 2, 4, 6, 8, or 12). `null` when the test was not enabled or its estimation did not complete
-- `establishedDownloadConnectionCount` and `establishedUploadConnectionCount`: the connections that opened. A throughput stage starts only once every one of its connections is open (one that cannot open fails the stage), so this equals the requested count. `null` when the test was not enabled or its throughput stage did not complete
-- `downloadConnectionCount` and `uploadConnectionCount`: the connections that carried the throughput stage, the same as the established count. `null` when the test was not enabled or its throughput stage did not complete (results from library 0.6.0 and earlier report the requested count once estimation completed)
-- `downloadPacketSize` and `uploadPacketSize`: `null` when the corresponding test was not enabled or did not reach the estimation phase
+- `initialDownloadConnectionCount` and `initialUploadConnectionCount`: the connections the throughput stage started with, from the estimate (1, 2, 4, 6, 8, or 12). A stage that measured more speed than its connections called for opened more during the stage (the scale-up, see [protocol](protocol.md#scale-up)): then the final counts below are higher. `null` when the test was not enabled or its estimation did not complete; absent from results of earlier versions
+- `requestedDownloadConnectionCount` and `requestedUploadConnectionCount`: the connections the throughput stage asked for: the initial ones and the ones its scale-up added. Only the initial ones when the stage did not complete. `null` when the test was not enabled or its estimation did not complete
+- `establishedDownloadConnectionCount` and `establishedUploadConnectionCount`: the connections that opened. A throughput stage starts only once every one of its initial connections is open (one that cannot open fails the stage); a connection the scale-up added that cannot open is dropped, so this can be lower than the requested count. `null` when the test was not enabled or its throughput stage did not complete
+- `downloadConnectionCount` and `uploadConnectionCount`: the connections that carried the throughput stage at its end, the same as the established count. `null` when the test was not enabled or its throughput stage did not complete (results from library 0.6.0 and earlier report the requested count once estimation completed)
+- `downloadPacketSize` and `uploadPacketSize`: the first message size in KiB (download) and first chunk size (upload); each connection then sizes its messages from the speed it measures. `null` when the corresponding test was not enabled or did not reach the estimation phase
 
 ## `results`
 

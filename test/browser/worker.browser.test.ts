@@ -166,10 +166,11 @@ describe.skipIf(browsers.length === 0).each(browsers)('browser stage worker in %
     expect(report.workersCreated).toBe(2);
     // The page really was busy for the whole run.
     expect(report.busyBlocks).toBeGreaterThan(50);
-    // Loopback is far above 50 Mbps: the estimates pick the largest messages and the most
-    // sockets. A collapsed estimate would pick 1 KB messages on one socket.
-    expect(report.downloadPacketKb).toBe(1024);
-    expect(report.uploadPacketKb).toBe(1024);
+    // Loopback is far above 50 Mbps: the estimates pick the most sockets, and first messages of
+    // 2.5 ms of each one's share are tens of KB. A collapsed estimate would pick 1 KB messages on
+    // one socket.
+    expect(report.downloadPacketKb).toBeGreaterThanOrEqual(16);
+    expect(report.uploadPacketKb).toBeGreaterThanOrEqual(16);
     expect(report.downloadConnections).toBeGreaterThanOrEqual(8);
     expect(report.uploadConnections).toBeGreaterThanOrEqual(8);
     expect(report.downloadMbps).toBeGreaterThan(50);

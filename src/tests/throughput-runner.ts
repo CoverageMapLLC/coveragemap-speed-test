@@ -1,4 +1,16 @@
-import type { LatencyTestData, SpeedTestData, SpeedSnapshot } from '../types/speed-test.js';
+import {
+  MAX_CONNECTION_COUNT,
+  getDownloadConnectionCount,
+  getUploadConnectionCount,
+  type LatencyTestData,
+  type SpeedTestData,
+  type SpeedSnapshot,
+} from '../types/speed-test.js';
+import {
+  RateMeter,
+  getFirstDownloadMessageSizeKb,
+  getFirstUploadChunkSizeKb,
+} from '../utils/adaptive.js';
 import { CancellationToken, CancellationError } from '../utils/cancellation.js';
 import { SpeedTestError } from '../utils/failure.js';
 import {
@@ -8,6 +20,7 @@ import {
 } from '../utils/speed.js';
 import { createLoadedLatencyMonitor } from './loaded-latency-test.js';
 import {
+  SCALE_UP_SETTLE_MS,
   openThroughputLane,
   type ThroughputDirection,
   type ThroughputLane,
@@ -17,7 +30,9 @@ import { openWorkerLanes } from './worker-lanes.js';
 
 export interface ThroughputTestOptions {
   serverUrl: string;
+  /** The first message size, in KiB (see `ThroughputLaneOptions.messageSizeKb`). */
   messageSizeKb: number;
+  /** Connections the stage starts with. The scale-up may add more (see `SCALE_UP_CHECKS_MS`). */
   connectionCount: number;
   durationMs: number;
   latencyMs: number;
@@ -50,6 +65,24 @@ export const LOADED_LATENCY_DELAY_MS = 1000;
  * data did not measure the link.
  */
 export const TRANSFER_TIMEOUT_MS = 10_000;
+/**
+ * The scale-up checks, in ms after the stage's first counted bytes. At each one, a stage whose
+ * speed over the last 500 ms calls for more connections than it has (the same table as the
+ * estimate) opens the difference at once, up to 12. It never closes any. A bad estimate had
+ * left links with 1% loss on 2 to 4 connections, measuring 417 to 790 Mbps of 940.
+ */
+export const SCALE_UP_CHECKS_MS: readonly number[] = [1000, 2000, 3000];
+/**
+ * A stage scales up only for a speed this many times the next tier's threshold. The scale-up is
+ * for estimates far too low, not for links near a threshold: right after the ramp-up, data the
+ * client hadn't read yet arrives in a burst, and a 940 Mbps link read over 1 Gbps for a moment.
+ */
+export const SCALE_UP_MARGIN = 1.25;
+/** A scale-up check runs only while at least this much of the stage is left to measure. */
+export const MIN_SCALE_UP_REMAINING_MS = 3000;
+/** The runner's own wait for added sockets to settle, should a lane never report. */
+const SCALE_UP_SETTLE_FALLBACK_MS = SCALE_UP_SETTLE_MS + 250;
+const RATE_SAMPLE_INTERVAL_MS = 50;
 
 /**
  * Runs a download or upload throughput stage: opens the lanes, starts them together once
@@ -99,7 +132,23 @@ export function runThroughputTest(
     /** Where the measurement starts, in ms into the stage; null until then. */
     let measuredFromMs: number | null = null;
     let measuredFromBytes = 0;
+    /**
+     * After a scale-up restarted the measurement, the live speed blends from the value shown at
+     * that moment, not from the whole stage's (see `liveSpeed`).
+     */
+    let liveFromMbps: number | null = null;
+    let lastLiveMbps = 0;
     const snapshots: SpeedSnapshot[] = [];
+    const connectionCountFor = direction === 'download' ? getDownloadConnectionCount : getUploadConnectionCount;
+    /** Connections asked for, the added ones included. */
+    let requestedConnections = connectionCount;
+    const rate = new RateMeter();
+    let rateTimer: ReturnType<typeof setInterval> | null = null;
+    const scaleUpTimers: Array<ReturnType<typeof setTimeout>> = [];
+    let restartTimer: ReturnType<typeof setTimeout> | null = null;
+    let nextScaleUpId = 0;
+    /** Scale-ups still waiting for their lanes, by id. */
+    const scaleUps = new Map<number, { lanes: number; opened: number; fallback: ReturnType<typeof setTimeout> }>();
     const loadedLatencyMonitor = createLoadedLatencyMonitor({
       serverUrl,
       cancellationToken,
@@ -128,7 +177,7 @@ export function runThroughputTest(
       const stageSpeed = calculateStageSpeedMbps(bytes, elapsed, latencyMs, jitterMs);
       if (measuredFromMs === null || elapsed <= measuredFromMs) return stageSpeed;
       const measured = calculateSpeedSinceMbps(bytes, elapsed, measuredFromBytes, measuredFromMs);
-      return calculateLiveSpeedMbps(stageSpeed, measured, elapsed - measuredFromMs);
+      return calculateLiveSpeedMbps(liveFromMbps ?? stageSpeed, measured, elapsed - measuredFromMs);
     };
 
     let transferTimer: ReturnType<typeof setTimeout> | null = null;
@@ -142,6 +191,70 @@ export function runThroughputTest(
       rampUpTimer = null;
       if (loadedLatencyTimer) clearTimeout(loadedLatencyTimer);
       loadedLatencyTimer = null;
+      if (rateTimer) clearInterval(rateTimer);
+      rateTimer = null;
+      for (const timer of scaleUpTimers) clearTimeout(timer);
+      scaleUpTimers.length = 0;
+      if (restartTimer) clearTimeout(restartTimer);
+      restartTimer = null;
+      for (const scaleUp of scaleUps.values()) clearTimeout(scaleUp.fallback);
+      scaleUps.clear();
+    };
+
+    /** Measures from now on, leaving out the connections a scale-up added while they ramped up. */
+    const restartMeasurement = () => {
+      restartTimer = null;
+      if (settled || finishing || testStartTime === null) return;
+      measuredFromMs = performance.now() - testStartTime;
+      measuredFromBytes = totalBytes();
+      liveFromMbps = lastLiveMbps;
+    };
+
+    /** Every lane reported a scale-up's sockets, or the runner stopped waiting: measure again 250 ms later. */
+    const scaleUpSettled = (scaleUpId: number) => {
+      const scaleUp = scaleUps.get(scaleUpId);
+      if (!scaleUp) return;
+      clearTimeout(scaleUp.fallback);
+      scaleUps.delete(scaleUpId);
+      if (restartTimer) clearTimeout(restartTimer);
+      restartTimer = setTimeout(restartMeasurement, RAMP_UP_EXCLUSION_MS);
+    };
+
+    /** A scale-up check (see `SCALE_UP_CHECKS_MS`). */
+    const checkScaleUp = () => {
+      if (settled || finishing || testStartTime === null || !lanes) return;
+      const now = performance.now();
+      const elapsed = now - testStartTime;
+      if (durationMs - elapsed < MIN_SCALE_UP_REMAINING_MS) return;
+      const mbps = rate.mbps(elapsed, totalBytes());
+      if (mbps === null) return;
+      const target = Math.min(connectionCountFor(mbps / SCALE_UP_MARGIN), MAX_CONNECTION_COUNT);
+      if (target <= requestedConnections) return;
+      const added = target - requestedConnections;
+      requestedConnections = target;
+
+      // New connections start at the stage's speed per connection, as its first ones did
+      const perConnectionMbps = mbps / target;
+      const messageSizeKb =
+        direction === 'download'
+          ? getFirstDownloadMessageSizeKb(perConnectionMbps)
+          : getFirstUploadChunkSizeKb(perConnectionMbps);
+      // Spread over the lanes (threads) with the fewest connections
+      const shares = new Map<ThroughputLane, number>();
+      const countOf = (lane: ThroughputLane) => lane.connectionCount + (shares.get(lane) ?? 0);
+      for (let i = 0; i < added; i++) {
+        let lane = lanes[0];
+        for (const candidate of lanes) if (countOf(candidate) < countOf(lane)) lane = candidate;
+        shares.set(lane, (shares.get(lane) ?? 0) + 1);
+      }
+
+      const scaleUpId = ++nextScaleUpId;
+      scaleUps.set(scaleUpId, {
+        lanes: shares.size,
+        opened: 0,
+        fallback: setTimeout(() => scaleUpSettled(scaleUpId), SCALE_UP_SETTLE_FALLBACK_MS),
+      });
+      for (const [lane, count] of shares) lane.addConnections(count, messageSizeKb, scaleUpId);
     };
 
     /**
@@ -151,6 +264,10 @@ export function runThroughputTest(
     const firstBytes = () => {
       if (sawFirstBytes || settled || finishing || testStartTime === null) return;
       sawFirstBytes = true;
+      const stageLeftMs = durationMs - (performance.now() - testStartTime);
+      for (const atMs of SCALE_UP_CHECKS_MS) {
+        if (atMs < stageLeftMs) scaleUpTimers.push(setTimeout(checkScaleUp, atMs));
+      }
       rampUpTimer = setTimeout(() => {
         rampUpTimer = null;
         if (settled || finishing || testStartTime === null) return;
@@ -221,6 +338,10 @@ export function runThroughputTest(
         bytes,
         snapshots,
         loadedLatency,
+        initialConnectionCount: connectionCount,
+        requestedConnectionCount: requestedConnections,
+        // Added connections count once they opened, also after their scale-up settled
+        connectionCount: (lanes ?? []).reduce((sum, lane) => sum + lane.openedConnectionCount, 0),
       });
     };
 
@@ -239,11 +360,17 @@ export function runThroughputTest(
           bytes,
         };
         snapshots.push(snapshot);
-        if (onSnapshot) {
-          const live = liveSpeed(bytes, elapsed);
-          onSnapshot(live === snapshot.speedMbps ? snapshot : { ...snapshot, speedMbps: live });
-        }
+        const live = liveSpeed(bytes, elapsed);
+        lastLiveMbps = live;
+        onSnapshot?.(live === snapshot.speedMbps ? snapshot : { ...snapshot, speedMbps: live });
       }, snapshotIntervalMs);
+
+      // The speed over the last 500 ms, for the scale-up checks
+      rate.record(0, 0);
+      rateTimer = setInterval(() => {
+        if (testStartTime === null) return;
+        rate.record(performance.now() - testStartTime, totalBytes());
+      }, RATE_SAMPLE_INTERVAL_MS);
 
       finishTimer = setTimeout(() => {
         void finishTest();
@@ -281,9 +408,15 @@ export function runThroughputTest(
       onBytes: () => {
         if (!sawFirstBytes) firstBytes();
       },
+      onScaleUpSettled: (scaleUpId, opened) => {
+        const scaleUp = scaleUps.get(scaleUpId);
+        if (!scaleUp) return;
+        scaleUp.opened += opened;
+        if (--scaleUp.lanes <= 0) scaleUpSettled(scaleUpId);
+      },
     };
 
-    const laneOptions = { serverUrl, connectionCount, messageSizeKb, nodeWebSocket };
+    const laneOptions = { serverUrl, connectionCount, messageSizeKb, latencyMs, nodeWebSocket };
     const openLocalLane = () => openThroughputLane(direction, laneOptions, callbacks);
 
     const attach = (opened: ThroughputLane[]) => {
