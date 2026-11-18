@@ -392,22 +392,25 @@ loop:
     else stop
   else if this is the first round and messageSizeBytes < 5 MB:
     messageSizeBytes *= 3; continue                                (never trusted alone)
-  else if speedMbps >= baseline.speedMbps / 2:             stop   (a clean round)
+  else if speedMbps >= baseline.speedMbps / 2
+       or (the round before was 100 ms or more, smaller, and speedMbps < twice its speed):
+                                                           stop   (a clean round)
   else:                                                            (a stalled round)
     if messageSizeBytes < 5 MB: messageSizeBytes *= 3 (at most 5 MB)
     continue
 
-resolve the fastest of the last 3 rounds that didn't stall { durationMs, bytes, speedMbps }
-  (all 3 stalled: the fastest round that didn't stall)
+resolve the round it stopped on, when that took 100 ms or more and didn't stall;
+  otherwise the fastest of the last 3 rounds that didn't stall
+  (all 3 stalled: the fastest round that didn't stall) { durationMs, bytes, speedMbps }
 ```
 
 Tripling reaches 5 MB in 7 rounds, three round trips fewer than doubling, which matters most on long paths. A slow link still stops early: at 100 kbps the first 10 KB round takes about 820 ms, and the second (30 KB, about 2.5 s) confirms it.
 
 **A slow first round is never trusted alone.** With nothing to compare it with, it can't tell a slow link from one that stalled: on a 300 ms path, an upload estimate read 0.1 Mbps after its first 5 KB took a round trip longer. Only links under about 0.8 Mbps take 100 ms or more for the first round, so only they pay for the second round.
 
-**Stalled rounds.** A round that took 100 ms or more but ran at less than half the fastest earlier round that didn't stall (the baseline) stalled, most likely on a lost packet: its recovery costs a round trip, or a retransmission timeout for a loss near the end of a message. Asking for more data cannot make a link slower, so estimation goes on with a larger round, which spreads the recovery over more data. Stopping on the first slow round, as before, made a 940 Mbps link with 1% loss estimate 1 to 90 Mbps and run its stage on 2 to 4 connections. The baseline leaves stalled rounds out, so stalls in a row are each compared with the last clean speed: compared with one another, three 200 ms recoveries in a row on a 900 Mbps link made the third look clean at about 90 Mbps. Estimation settles 2 s after its first round in any case; after a reconnect, 2 s after the first round on the new connection.
+**Stalled rounds.** A round that took 100 ms or more but ran at less than half the fastest earlier round that didn't stall (the baseline) stalled, most likely on a lost packet: its recovery costs a round trip, or a retransmission timeout for a loss near the end of a message. Asking for more data cannot make a link slower, so estimation goes on with a larger round, which spreads the recovery over more data. Stopping on the first slow round, as before, made a 940 Mbps link with 1% loss estimate 1 to 90 Mbps and run its stage on 2 to 4 connections. A stall is a fixed delay, so a round three times larger runs about three times faster through it, while a link that is simply slow runs every size at about the same speed. So a slow round under twice the speed of the slow, smaller round right before it is the link, not a stall: behind a shaper that lets a burst through at once, the first 10 KB read 82 Mbps on a 4 Mbps link, and without this rule every later round counted as a stall. The baseline leaves stalled rounds out, so stalls in a row are each compared with the last clean speed: compared with one another, three 200 ms recoveries in a row on a 900 Mbps link made the third look clean at about 90 Mbps. Estimation settles 2 s after its first round in any case; after a reconnect, 2 s after the first round on the new connection.
 
-**The estimate is the fastest of the last three rounds that didn't stall** (when all three stalled, the fastest round that didn't stall), not the last one: a stall can only make a round look slower. Earlier, smaller rounds are left out, because a round of a few KB takes only milliseconds beyond the latency, and a millisecond of jitter can make it read several times too fast.
+**The estimate is the round estimation stopped on** when that was a clean round of 100 ms or more, the one long enough to measure. At the 5 MB cap or the time cap it is the fastest of the last three rounds that didn't stall (when all three stalled, the fastest round that didn't stall), not the last one: a stall can only make a round look slower. Earlier, smaller rounds are left out, because a round of a few KB takes only milliseconds beyond the latency, and a millisecond of jitter can make it read several times too fast.
 
 A slow round only counts if the network made it slow. A heartbeat timer runs every 10 ms during each round; if one arrives more than 50 ms late, the thread was blocked (an application rendering between stages, for example), so the message was handled late and the round's timing is not the network's. Such a round is repeated at the same size, up to 3 times, before it is used. Without this, a page that rendered for a few hundred milliseconds right after a stage could make a gigabit link estimate below 1 Mbps. Upload estimation does the same.
 

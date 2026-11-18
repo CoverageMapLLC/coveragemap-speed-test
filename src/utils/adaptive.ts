@@ -55,21 +55,34 @@ export function nextEstimationBytes(bytes: number): number {
  * Which rounds stalled, in order. A round of `ESTIMATION_TARGET_MS` or more that ran under
  * `STALLED_ROUND_RATIO` of the fastest earlier round that didn't stall (the clean baseline)
  * stalled, most likely on a lost packet whose recovery took a round trip or a retransmission
- * timeout. The first round never counts as stalled: there is nothing to compare it with. The
- * baseline leaves stalled rounds out, so several stalls in a row are each compared with the last
- * clean speed, not with one another: compared with a window of the last rounds, three 200 ms
- * recoveries in a row on a 900 Mbps link made the third one look clean at about 90 Mbps.
+ * timeout, unless it ran at less than twice the speed of a slow (`ESTIMATION_TARGET_MS` or more),
+ * smaller round right before it. A stall is a fixed delay, so a round three times larger runs
+ * about three times faster through the same delay, while a link that is simply that slow runs
+ * every size at about the same speed: then the slow rounds are the link, and the baseline was a
+ * small round that read too fast (on a shaper that lets a burst through at once, the first 10 KB
+ * arrived in no time and read 82 Mbps on a 4 Mbps link). The first round never counts as
+ * stalled: there is nothing to compare it with.
+ *
+ * The baseline leaves stalled rounds out, so several stalls in a row are each compared with the
+ * last clean speed, not with one another: compared with a window of the last rounds, three 200 ms
+ * recoveries in a row on a 900 Mbps link made the third look clean at about 90 Mbps.
  */
 export function stalledEstimationRounds(rounds: readonly EstimationRound[]): boolean[] {
   const stalled: boolean[] = [];
   let baseline: EstimationRound | null = null;
+  let previous: EstimationRound | null = null;
   for (const round of rounds) {
+    const slow = round.durationMs >= ESTIMATION_TARGET_MS;
+    const linkRate =
+      previous !== null &&
+      previous.durationMs >= ESTIMATION_TARGET_MS &&
+      round.bytes > previous.bytes &&
+      round.speedMbps < previous.speedMbps / STALLED_ROUND_RATIO;
     const isStalled =
-      baseline !== null &&
-      round.durationMs >= ESTIMATION_TARGET_MS &&
-      round.speedMbps < baseline.speedMbps * STALLED_ROUND_RATIO;
+      baseline !== null && slow && round.speedMbps < baseline.speedMbps * STALLED_ROUND_RATIO && !linkRate;
     stalled.push(isStalled);
     if (!isStalled && (!baseline || round.speedMbps > baseline.speedMbps)) baseline = round;
+    previous = round;
   }
   return stalled;
 }
@@ -82,14 +95,18 @@ function fastest(rounds: readonly EstimationRound[]): EstimationRound | null {
 }
 
 /**
- * The estimate: the fastest of the last `ESTIMATION_REFERENCE_ROUNDS` rounds that didn't stall,
- * or, when all of those stalled, the fastest round that didn't stall (then the fastest round).
- * Small rounds are left out once there are larger ones: a round of a few KB takes only
- * milliseconds beyond the latency, so a millisecond of jitter can make it read several times too
- * fast, and larger rounds say more about the link.
+ * The estimate. When the last round took `ESTIMATION_TARGET_MS` or more and didn't stall (the
+ * clean round estimation stops on), that round: the one long enough to measure. Otherwise (at
+ * the 5 MiB cap or the time cap) the fastest of the last `ESTIMATION_REFERENCE_ROUNDS` rounds
+ * that didn't stall, or when all of those stalled the fastest round that didn't (then the
+ * fastest round). Small rounds are left out once there are larger ones: a round of a few KB
+ * takes only milliseconds beyond the latency, so a millisecond of jitter, or a burst a shaper
+ * lets through, can make it read several times too fast.
  */
 export function estimationReference(rounds: readonly EstimationRound[]): EstimationRound | null {
   const stalled = stalledEstimationRounds(rounds);
+  const last = rounds.length - 1;
+  if (last >= 0 && rounds[last].durationMs >= ESTIMATION_TARGET_MS && !stalled[last]) return rounds[last];
   const clean = rounds.filter((_, i) => !stalled[i]);
   const first = rounds.length - ESTIMATION_REFERENCE_ROUNDS;
   return fastest(rounds.filter((_, i) => i >= first && !stalled[i])) ?? fastest(clean) ?? fastest(rounds);

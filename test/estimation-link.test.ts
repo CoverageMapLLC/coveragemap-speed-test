@@ -12,6 +12,8 @@ const link = {
   roundTripMs: 0,
   mbps: 0,
   stalls: new Map<number, number>(),
+  /** The first bytes of every round arrive at once, as through a shaper that allows a burst. */
+  burstBytes: 0,
 };
 
 class LinkSocketMock {
@@ -41,7 +43,8 @@ class LinkSocketMock {
   }
 
   private delayMs(bytes: number): number {
-    return link.roundTripMs + bytes / (link.mbps * 125) + (link.stalls.get(this.round) ?? 0);
+    const shaped = Math.max(bytes - link.burstBytes, 0);
+    return link.roundTripMs + shaped / (link.mbps * 125) + (link.stalls.get(this.round) ?? 0);
   }
 
   send(payload: string | Uint8Array): void {
@@ -122,6 +125,7 @@ describe('download estimation after reconnecting', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] });
     LinkSocketMock.starts = [];
     link.stalls = new Map();
+    link.burstBytes = 0;
   });
 
   afterEach(() => {
@@ -150,6 +154,7 @@ describe.each(['download', 'upload'] as const)('%s estimation on a simulated lin
     LinkSocketMock.starts = [];
     LinkSocketMock.uploadRounds = [];
     link.stalls = new Map();
+    link.burstBytes = 0;
   });
 
   afterEach(() => {
@@ -165,6 +170,16 @@ describe.each(['download', 'upload'] as const)('%s estimation on a simulated lin
     expect(result.speedMbps).toBeGreaterThan(900);
     expect(sizes().at(-1)).toBe(5120);
     expect(sizes()[1] / sizes()[0]).toBe(3);
+  });
+
+  it('measures a slow link behind a shaper that lets a burst through', async () => {
+    // 4 Mbps, the first 16 KiB of every round at once: the 10 KiB round reads far too fast, and
+    // the slow rounds after it are the link, not stalls
+    Object.assign(link, { roundTripMs: 40, mbps: 4, burstBytes: 16 * 1024 });
+    const { result, tookMs } = await run(direction);
+    expect(result.speedMbps).toBeGreaterThan(3.5);
+    expect(result.speedMbps).toBeLessThan(5);
+    expect(tookMs).toBeLessThan(ESTIMATION_TIME_CAP_MS + 1000);
   });
 
   it('compares stalls in a row with the last clean round, not with one another', async () => {

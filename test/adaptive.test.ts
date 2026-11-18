@@ -80,6 +80,21 @@ describe('estimation rounds', () => {
     expect(stalledEstimationRounds([round(10, 0.1), round(30, 0.1)])).toEqual([false, false]);
   });
 
+  it('take slow rounds at about the same speed as the slow round before them as the link', () => {
+    // A burst read the first round at 80 Mbps; the link is 4 Mbps: the first slow round looks
+    // like a stall, the next one at the same speed is the link, and estimation stops on it
+    const rounds = [round(10, 80), round(30, 10), round(90, 4), round(270, 4)];
+    expect(stalledEstimationRounds(rounds)).toEqual([false, false, true, false]);
+    expect(nextEstimationStep(rounds, 900)).toBe('stop');
+    expect(estimationReference(rounds)).toBe(rounds[3]);
+    // A stall's fixed delay makes the larger round about three times faster: still a stall
+    const stalls = [round(10, 900), round(30, 900), round(90, 900, 200), round(270, 900, 200)];
+    expect(stalledEstimationRounds(stalls)).toEqual([false, false, true, true]);
+    // At the cap, a repeated round is no larger, so it is compared with the baseline only
+    const cap = [round(2430, 900), round(5120, 900, 400), round(5120, 900, 400)];
+    expect(stalledEstimationRounds(cap)).toEqual([false, true, true]);
+  });
+
   it('stop at 5 MiB when the round is short, and repeat it when it stalled', () => {
     expect(nextEstimationStep([round(2430, 9000), round(5120, 9000)], 300)).toBe('stop');
     expect(nextEstimationStep([round(2430, 900), round(5120, 900, 400)], 300)).toBe('repeat');
