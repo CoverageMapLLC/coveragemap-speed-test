@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 Results now follow the standard result format shared by every CoverageMap client (the Android and iOS libraries, the CoverageMap app, and the Core API). Every new field is nullable and `version` stays `1`, so payloads from earlier versions stay valid.
 
