@@ -11,6 +11,7 @@ import {
   getServerTcpUrl,
   getServerWebSocketUrl,
   isTcpUrl,
+  loadNodeWebSocket,
   loadTcpTransport,
   openSocket,
   requiresSecureWebSocket,
@@ -27,6 +28,7 @@ import {
 } from '../src/tests/worker-lanes.js';
 import type { SpeedTestServer } from '../src/types/speed-server.js';
 import { CancellationToken } from '../src/utils/cancellation.js';
+import { getFailureReason } from '../src/utils/failure.js';
 
 function server(overrides: Partial<SpeedTestServer> = {}): SpeedTestServer {
   return {
@@ -215,6 +217,55 @@ describe('first connection failures', () => {
       })
     ).rejects.toBeInstanceOf(SocketConnectError);
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  /** A server that accepts TCP connections and never answers. */
+  async function startSilentServer(): Promise<number> {
+    const sockets = new Set<net.Socket>();
+    const silent = net.createServer((socket) => sockets.add(socket.on('error', () => {})));
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    cleanups.push(() => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise<void>((resolve) => silent.close(() => resolve()));
+    });
+    return (silent.address() as AddressInfo).port;
+  }
+
+  // Node.js sockets (raw TCP and the library's WebSocket client) fire `error` synchronously
+  // when closed while connecting; that must not turn a timeout into a refused connection.
+  describe.each([
+    ['raw TCP', (port: number) => `tcp://127.0.0.1:${port}`],
+    ['the Node.js WebSocket client', (port: number) => `ws://127.0.0.1:${port}/v1/ws`],
+  ])('an unanswered handshake over %s', (_transport, url) => {
+    beforeAll(async () => {
+      expect(await loadNodeWebSocket()).not.toBeNull();
+    });
+
+    it('fails with connectionTimeout after connectTimeoutMs', async () => {
+      const port = await startSilentServer();
+      const error = await runLatencyTest({
+        serverUrl: url(port),
+        pingCount: 3,
+        connectTimeoutMs: 300,
+        cancellationToken: new CancellationToken(),
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(SocketConnectError);
+      expect(getFailureReason(error)).toBe('connectionTimeout');
+      expect((error as Error).message).toContain('Connection not open after 300ms');
+    });
+
+    it('fails with connectionTimeout at the latency timeout', async () => {
+      const port = await startSilentServer();
+      const error = await runLatencyTest({
+        serverUrl: url(port),
+        pingCount: 3,
+        timeoutMs: 300,
+        cancellationToken: new CancellationToken(),
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(SocketConnectError);
+      expect(getFailureReason(error)).toBe('connectionTimeout');
+      expect((error as Error).message).toContain('Latency test timed out after 300ms');
+    });
   });
 
   it('reports a refused connection as a connect error', async () => {

@@ -1,6 +1,6 @@
 {
   "name": "@coveragemap/speed-test",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Test your internet speed with CoverageMap.com",
   "type": "module",
   "main": "dist/index.js",
@@ -54,7 +54,7 @@
   "author": "CoverageMap",
   "license": "Apache-2.0",
   "dependencies": {
-    "@coveragemap/speed-transport": "^0.2.0",
+    "@coveragemap/speed-transport": "^0.3.1",
     "ua-parser-js": "^2.0.9"
   },
   "devDependencies": {

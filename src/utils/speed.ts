@@ -35,6 +35,30 @@ export function calculateSpeedSinceMbps(
   return calculateSpeedMbps(bytes - fromBytes, elapsedMs - fromMs);
 }
 
+/**
+ * How long after the measurement start the live speed takes to move from the whole-stage speed
+ * to the measured speed. Progress callbacks only: stored snapshots and the result never blend.
+ */
+export const LIVE_SPEED_BLEND_MS = 1000;
+
+/**
+ * The live speed `sinceMeasurementStartMs` after the measurement start: `stageSpeedMbps` at the
+ * start, moving in a straight line to `measuredSpeedMbps` over `LIVE_SPEED_BLEND_MS`, which it is
+ * from then on. Right after the start the measured window is only milliseconds long, and its
+ * speed jumps with every message or `ACK` that lands in it (or none): switching to it at once
+ * made the live speed jump at the start and flicker for a moment after.
+ */
+export function calculateLiveSpeedMbps(
+  stageSpeedMbps: number,
+  measuredSpeedMbps: number,
+  sinceMeasurementStartMs: number
+): number {
+  if (sinceMeasurementStartMs <= 0) return stageSpeedMbps;
+  if (sinceMeasurementStartMs >= LIVE_SPEED_BLEND_MS) return measuredSpeedMbps;
+  const weight = sinceMeasurementStartMs / LIVE_SPEED_BLEND_MS;
+  return roundTo3Decimals(stageSpeedMbps + (measuredSpeedMbps - stageSpeedMbps) * weight);
+}
+
 export function formatSpeed(mbps: number): string {
   if (mbps < 0.01) return '0';
   if (mbps < 1) return mbps.toFixed(2);

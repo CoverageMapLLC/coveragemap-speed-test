@@ -16,6 +16,14 @@ const stageSpeed = (bytes: number, elapsedMs: number, biasMs: number) =>
 /** The speed measured from `fromMs` into the stage, with `fromBytes` counted then. */
 const speedSince = (bytes: number, elapsedMs: number, fromBytes: number, fromMs: number) =>
   round3((bytes - fromBytes) / ((elapsedMs - fromMs) * 125));
+/** The live speed `onSnapshot` reports: from the stage's speed to the measured one over 1 s. */
+const liveSpeed = (bytes: number, elapsedMs: number, fromBytes: number, fromMs: number, biasMs: number) => {
+  const stage = stageSpeed(bytes, elapsedMs, biasMs);
+  if (elapsedMs <= fromMs) return stage;
+  const measured = speedSince(bytes, elapsedMs, fromBytes, fromMs);
+  const since = elapsedMs - fromMs;
+  return since >= 1000 ? measured : round3(stage + (measured - stage) * (since / 1000));
+};
 
 const UPLOAD_CHUNK_BYTES = 8 * 1024;
 
@@ -124,18 +132,20 @@ const BIAS_MS = 12;
 async function run(
   direction: 'download' | 'upload',
   options: Partial<ThroughputTestOptions> & { durationMs: number }
-): Promise<{ result: SpeedTestData; snapshots: SpeedTestData['snapshots'] }> {
-  const snapshots: SpeedTestData['snapshots'] = [];
+): Promise<{ result: SpeedTestData; snapshots: SpeedTestData['snapshots']; live: SpeedTestData['snapshots'] }> {
+  const live: SpeedTestData['snapshots'] = [];
   const runStage = direction === 'download' ? runDownloadSpeedTest : runUploadSpeedTest;
   const promise = runStage({
     ...BASE_OPTIONS,
     messageSizeKb: direction === 'download' ? 64 : UPLOAD_CHUNK_BYTES / 1024,
     cancellationToken: new CancellationToken(),
-    onSnapshot: (snapshot) => snapshots.push({ ...snapshot }),
+    onSnapshot: (snapshot) => live.push({ ...snapshot }),
     ...options,
   });
   await vi.advanceTimersByTimeAsync(options.durationMs + 500);
-  return { result: await promise, snapshots };
+  const result = await promise;
+  // `snapshots`: stored in the result, at the measured speed. `live`: what onSnapshot got.
+  return { result, snapshots: result.snapshots, live };
 }
 
 describe('throughput ramp-up exclusion', () => {
@@ -158,7 +168,7 @@ describe('throughput ramp-up exclusion', () => {
     // The first byte arrives 405 ms into the stage; 10 kB per 20 ms, then 100 Mbps.
     const feed: Feed = { firstMs: 405, everyMs: 20, units: (at) => (at < 655 ? 10_000 : 250_000) };
     RampSocketMock.feed = feed;
-    const { result, snapshots } = await run('download', { durationMs: 3000 });
+    const { result, snapshots, live } = await run('download', { durationMs: 3000 });
 
     const fromMs = 405 + 250;
     const fromBytes = delivered(feed, fromMs);
@@ -169,7 +179,7 @@ describe('throughput ramp-up exclusion', () => {
     // Leaving out the ramp-up raises the speed above the whole stage's.
     expect(result.speedMbps).toBeGreaterThan(stageSpeed(result.bytes, 3000, BIAS_MS));
 
-    // Progress uses the stage's speed until the measurement starts, then the measured speed.
+    // Snapshots use the stage's speed until the measurement starts, then the measured speed.
     const before = snapshots.filter((snapshot) => snapshot.timeOffsetMs < fromMs);
     const after = snapshots.filter((snapshot) => snapshot.timeOffsetMs > fromMs && snapshot.timeOffsetMs <= 3000);
     expect(before.map((s) => s.timeOffsetMs)).toEqual([100, 200, 300, 400, 500, 600]);
@@ -180,14 +190,44 @@ describe('throughput ramp-up exclusion', () => {
     for (const snapshot of after) {
       expect(snapshot.speedMbps).toBe(speedSince(snapshot.bytes, snapshot.timeOffsetMs, fromBytes, fromMs));
     }
+    // The live speed is the same until the measurement start, then moves to the measured speed
+    // over the next second, and is the measured speed from then on.
+    expect(live.map((s) => s.timeOffsetMs)).toEqual(snapshots.map((s) => s.timeOffsetMs));
+    live.forEach((snapshot, index) => {
+      expect(snapshot.bytes).toBe(snapshots[index].bytes);
+      expect(snapshot.speedMbps).toBe(liveSpeed(snapshot.bytes, snapshot.timeOffsetMs, fromBytes, fromMs, BIAS_MS));
+      if (snapshot.timeOffsetMs < fromMs || snapshot.timeOffsetMs >= fromMs + 1000) {
+        expect(snapshot.speedMbps).toBe(snapshots[index].speedMbps);
+      }
+    });
+    const blending = live.filter((s) => s.timeOffsetMs > fromMs && s.timeOffsetMs < fromMs + 1000);
+    expect(blending.map((s) => s.timeOffsetMs)).toEqual([700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600]);
+    for (let i = 1; i < blending.length; i++) {
+      expect(blending[i].speedMbps).toBeGreaterThanOrEqual(blending[i - 1].speedMbps);
+    }
     // The final speed continues the last live values.
     expect(after.at(-1)!.speedMbps).toBeCloseTo(result.speedMbps, 0);
+    expect(live.at(-1)!.speedMbps).toBe(after.at(-1)!.speedMbps);
 
     // Loaded latency pings start 1 s after the first byte, then 500 ms after each PONG.
     const latencySocket = RampSocketMock.instances[1];
     expect(latencySocket.pings[0]).toBe(405 + 1000);
     expect(latencySocket.pings[1]).toBe(405 + 1000 + 5 + 500);
     expect(result.loadedLatency!.latencies.length).toBe(latencySocket.pings.length);
+  });
+
+  it('keeps the live speed from dropping when the first window after the start holds no data', async () => {
+    // 500 kB lumps every 80 ms from 105 ms: the measurement starts at 355 ms, and the snapshot
+    // 45 ms later falls before the next lump at 425 ms.
+    const feed: Feed = { firstMs: 105, everyMs: 80, units: () => 500_000 };
+    RampSocketMock.feed = feed;
+    const { snapshots, live } = await run('download', { durationMs: 2000 });
+
+    const at = (list: SpeedTestData['snapshots'], ms: number) => list.find((s) => s.timeOffsetMs === ms)!;
+    // The measured speed of that 45 ms window is 0; the live speed stays near the stage's.
+    expect(at(snapshots, 400).speedMbps).toBe(0);
+    expect(at(live, 400).speedMbps).toBeGreaterThan(at(live, 300).speedMbps * 0.9);
+    expect(at(live, 400).speedMbps).toBe(round3(stageSpeed(at(live, 400).bytes, 400, BIAS_MS) * (1 - 45 / 1000)));
   });
 
   it('still counts a ramp-up that lasts longer than the exclusion', async () => {
@@ -271,10 +311,11 @@ describe('throughput ramp-up exclusion', () => {
   });
 
   it('measures the upload from 250 ms after the first ACK', async () => {
-    // Four 8 KiB chunks acknowledged every 20 ms from 105 ms into the stage.
-    const feed: Feed = { firstMs: 105, everyMs: 20, units: () => 4 };
+    // Two 8 KiB chunks acknowledged every 20 ms from 105 ms into the stage: 6.6 Mbps, whose
+    // 10 ms is the 8 KiB chunk, so the lane keeps that size and every ACK credits 8 KiB.
+    const feed: Feed = { firstMs: 105, everyMs: 20, units: () => 2 };
     RampSocketMock.feed = feed;
-    const { result, snapshots } = await run('upload', { durationMs: 1500 });
+    const { result, snapshots, live } = await run('upload', { durationMs: 1500 });
 
     const fromMs = 105 + 250;
     const fromBytes = delivered(feed, fromMs, UPLOAD_CHUNK_BYTES);
@@ -285,6 +326,9 @@ describe('throughput ramp-up exclusion', () => {
     }
     for (const snapshot of snapshots.filter((s) => s.timeOffsetMs > fromMs && s.timeOffsetMs <= 1500)) {
       expect(snapshot.speedMbps).toBe(speedSince(snapshot.bytes, snapshot.timeOffsetMs, fromBytes, fromMs));
+    }
+    for (const snapshot of live) {
+      expect(snapshot.speedMbps).toBe(liveSpeed(snapshot.bytes, snapshot.timeOffsetMs, fromBytes, fromMs, BIAS_MS));
     }
     // Loaded latency pings start 1 s after the first ACK.
     expect(RampSocketMock.instances[1].pings[0]).toBe(105 + 1000);

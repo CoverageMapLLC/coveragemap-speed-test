@@ -109,9 +109,9 @@ const engine = new SpeedTestEngine({
 
 | Field | Range | Default | Description |
 |---|---|---|---|
-| `config.pingCount` | 5–50 | `10` | Number of latency pings per run |
-| `config.downloadDurationMs` | 3000–30000 | `10000` | Download test duration (ms) |
-| `config.uploadDurationMs` | 3000–30000 | `10000` | Upload test duration (ms) |
+| `config.pingCount` | 5–50 | `15` | Number of latency pings per run |
+| `config.downloadDurationMs` | 3000–30000 | `7000` | Download test duration (ms) |
+| `config.uploadDurationMs` | 3000–30000 | `7000` | Upload test duration (ms) |
 | `config.snapshotIntervalMs` | 50–5000 | `100` | How often progress snapshots are emitted (ms) |
 | `config.latencyTimeoutMs` | 3000–30000 | `10000` | Latency phase timeout (ms) |
 | `config.estimationTimeoutMs` | 3000–30000 | `15000` | Estimation phase timeout (ms) |
@@ -132,7 +132,7 @@ const engine = new SpeedTestEngine({
 
 ## Data Upload
 
-Completed test results are uploaded to CoverageMap systems (`map.coveragemap.com`) for analysis, benchmarking, and network quality metrics.
+Test results, passed or failed, are uploaded to CoverageMap systems (`map.coveragemap.com`) for analysis, benchmarking, and network quality metrics. Cancelled runs are not uploaded.
 
 If an upload fails, results are queued locally and retried automatically in the background on the next run.
 

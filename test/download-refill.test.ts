@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runDownloadSpeedTest } from '../src/tests/download-speed-test.js';
-import { getNextDownloadMessageSizeKb, openDownloadLane } from '../src/tests/throughput-lanes.js';
+import { openDownloadLane } from '../src/tests/throughput-lanes.js';
+import { getNextDownloadMessageSizeKb } from '../src/utils/adaptive.js';
 import { CancellationToken } from '../src/utils/cancellation.js';
 
 const KB = 1024;
@@ -94,13 +95,21 @@ class InterleavingServerSocketMock extends ManualSocketMock {
   }
 }
 
-async function openLane(messageSizeKb: number) {
+async function openLane(messageSizeKb: number, latencyMs = 0) {
   const lane = openDownloadLane(
-    { serverUrl: 'wss://speed.example.com/v1/ws', connectionCount: 1, messageSizeKb },
+    { serverUrl: 'wss://speed.example.com/v1/ws', connectionCount: 1, messageSizeKb, latencyMs },
     { onOpen: () => {}, onError: () => {} }
   );
   await vi.advanceTimersByTimeAsync(1);
   return { lane, socket: ManualSocketMock.instances[0] };
+}
+
+/** Delivers `count` messages of `kb`, one every `everyMs`, advancing the clock between them. */
+async function deliverOverTime(socket: ManualSocketMock, kb: number, count: number, everyMs: number) {
+  for (let i = 0; i < count; i++) {
+    socket.deliver(kb);
+    await vi.advanceTimersByTimeAsync(everyMs);
+  }
 }
 
 describe('download refills', () => {
@@ -115,62 +124,91 @@ describe('download refills', () => {
     vi.useRealTimers();
   });
 
-  it('grows the message size threefold up to 5 MB', () => {
-    const chain = (kb: number, steps: number) => {
-      const sizes = [kb];
-      for (let i = 0; i < steps; i++) sizes.push(getNextDownloadMessageSizeKb(sizes.at(-1)!));
-      return sizes;
-    };
-    expect(chain(1, 4)).toEqual([1, 3, 9, 27, 81]);
-    expect(chain(1024, 3)).toEqual([1024, 3072, 5120, 5120]);
+  it('sizes the next batch from the speed: 10 ms of it, as a power of two; fourfold before there is one', () => {
+    // No speed yet: four times the last size, up to 5 MiB
+    expect(getNextDownloadMessageSizeKb(1, null)).toBe(4);
+    expect(getNextDownloadMessageSizeKb(1024, null)).toBe(4096);
+    expect(getNextDownloadMessageSizeKb(4096, null)).toBe(5120);
+    // 10 ms at 100 Mbps is 122 KiB: 128
+    expect(getNextDownloadMessageSizeKb(4096, 100)).toBe(128);
+    // 10 ms at 1 Mbps is 1.2 KiB: 1
+    expect(getNextDownloadMessageSizeKb(1024, 1)).toBe(1);
+    // 10 ms at 10 Gbps is 12 MiB: the 5 MiB cap
+    expect(getNextDownloadMessageSizeKb(1, 10_000)).toBe(5120);
   });
 
-  it('asks for 500 messages, then 500 more at three times the size once 400 arrived', async () => {
+  it('asks for 200 messages, then 200 more once 100 are due when no speed is known yet', async () => {
     vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
     const { lane, socket } = await openLane(1024);
 
     lane.start();
-    expect(socket.commands).toEqual(['START 1024 500']);
-    socket.deliver(1024, 399);
-    expect(socket.commands).toEqual(['START 1024 500']);
+    expect(socket.commands).toEqual(['START 1024 200']);
+    // All at once: no time passes, so no speed
+    socket.deliver(1024, 99);
+    expect(socket.commands).toEqual(['START 1024 200']);
     socket.deliver(1024);
-    expect(socket.commands).toEqual(['START 1024 500', 'START 3072 500']);
-    expect(lane.bytes).toBe(400 * 1024 * KB);
+    expect(socket.commands).toEqual(['START 1024 200', 'START 4096 200']);
+    expect(lane.bytes).toBe(100 * 1024 * KB);
     lane.close();
   });
 
-  it('keeps a running total across interleaved batches of different sizes', async () => {
+  it('asks for the next batch 300 ms ahead at the measured message rate, sized for 10 ms', async () => {
     vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
-    const { lane, socket } = await openLane(1024);
+    const { lane, socket } = await openLane(16);
     lane.start();
-    socket.deliver(1024, 400);
-    // 600 due: the last 100 of the first batch arrive mixed with the second batch's.
+    // One 16 KiB message every 10 ms: 100 messages a second, 13 Mbps. 300 ms ahead is 30
+    // messages, so the refill goes out once 30 are due; 10 ms at 13 Mbps is 16 KiB.
+    await deliverOverTime(socket, 16, 169, 10);
+    expect(socket.commands).toEqual(['START 16 200']);
+    await deliverOverTime(socket, 16, 1, 10);
+    expect(socket.commands).toEqual(['START 16 200', 'START 16 200']);
+    lane.close();
+  });
+
+  it('asks two round trips ahead on a high latency link', async () => {
+    vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
+    // 400 ms latency: 800 ms ahead, 80 messages at 100 a second
+    const { lane, socket } = await openLane(16, 400);
+    lane.start();
+    await deliverOverTime(socket, 16, 119, 10);
+    expect(socket.commands).toEqual(['START 16 200']);
+    await deliverOverTime(socket, 16, 1, 10);
+    expect(socket.commands).toEqual(['START 16 200', 'START 16 200']);
+    lane.close();
+  });
+
+  it('grows the messages on a fast link and shrinks them on a slow one', async () => {
+    vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
+    const fast = await openLane(128);
+    fast.lane.start();
+    // One 128 KiB message every millisecond: 1 Gbps, whose 10 ms is 1280 KiB: 1024. A thousand
+    // a second wants 300 due, more than a batch, so the refill goes out once the rate is known.
+    await deliverOverTime(fast.socket, 128, 60, 1);
+    expect(fast.socket.commands).toEqual(['START 128 200', 'START 1024 200']);
+    fast.lane.close();
+    ManualSocketMock.instances = [];
+
+    const slow = await openLane(64);
+    slow.lane.start();
+    // One 64 KiB message every 50 ms: 10.5 Mbps, whose 10 ms is 12.8 KiB: 16. Twenty a second,
+    // so the refill goes out once 6 are due.
+    await deliverOverTime(slow.socket, 64, 194, 50);
+    expect(slow.socket.commands).toEqual(['START 64 200', 'START 16 200']);
+    slow.lane.close();
+  });
+
+  it('never has more than two batches outstanding', async () => {
+    vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
+    const { lane, socket } = await openLane(1, 1000);
+    lane.start();
+    // 1000 messages a second with 1 s latency would want 2000 due: one batch at most, so the
+    // refill goes out once 200 are due, and never two at once.
     for (let i = 0; i < 100; i++) {
-      socket.deliver(1024);
-      socket.deliver(3072);
+      socket.deliver(1, 1);
+      await vi.advanceTimersByTimeAsync(1);
     }
-    expect(lane.bytes).toBe(500 * 1024 * KB + 100 * 3072 * KB);
-    expect(socket.commands).toHaveLength(2);
-
-    // 400 due: the next refill goes out when the total is back down to 100.
-    socket.deliver(3072, 299);
-    expect(socket.commands).toHaveLength(2);
-    socket.deliver(3072);
-    expect(socket.commands).toEqual(['START 1024 500', 'START 3072 500', 'START 5120 500']);
-    expect(lane.bytes).toBe(500 * 1024 * KB + 400 * 3072 * KB);
-    lane.close();
-  });
-
-  it('repeats the refill on its own every 500 messages', async () => {
-    vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
-    const { lane, socket } = await openLane(1);
-    lane.start();
-    socket.deliver(1, 400);
-    socket.deliver(3, 499);
-    expect(socket.commands).toEqual(['START 1 500', 'START 3 500']);
-    socket.deliver(3);
-    socket.deliver(9, 500);
-    expect(socket.commands).toEqual(['START 1 500', 'START 3 500', 'START 9 500', 'START 27 500']);
+    const starts = socket.commands.filter((command) => command.startsWith('START'));
+    expect(starts).toHaveLength(2);
     lane.close();
   });
 
@@ -181,10 +219,12 @@ describe('download refills', () => {
     lane.start();
     await vi.advanceTimersByTimeAsync(1000);
 
-    expect(server.commands.slice(0, 3)).toEqual(['START 1 500', 'START 3 500', 'START 9 500']);
-    // Two loops ran at once: a 1 KB message arrived after the first 3 KB one.
-    const firstLarger = server.received.indexOf(3);
-    expect(firstLarger).toBeGreaterThanOrEqual(400);
+    // One 1 KiB message a millisecond (8 Mbps): the next batch, at 8 KiB, goes out once the
+    // rate is known, while most of the first is still due.
+    expect(server.commands.slice(0, 2)).toEqual(['START 1 200', 'START 8 200']);
+    // Two loops ran at once: a 1 KB message arrived after the first 8 KB one.
+    const firstLarger = server.received.indexOf(8);
+    expect(firstLarger).toBeGreaterThan(0);
     expect(server.received.slice(firstLarger).includes(1)).toBe(true);
     // Everything the server sent was requested, so all of it counts.
     expect(lane.bytes).toBe(server.sentBytes);
@@ -195,39 +235,39 @@ describe('download refills', () => {
     vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
     const { lane, socket } = await openLane(64);
     lane.start();
-    socket.deliver(64, 300);
-    // The socket starts closing: the refill at 400 cannot go out, so only 500 are due.
+    socket.deliver(64, 50);
+    // The socket starts closing: the refill at 100 due cannot go out, so only 200 are due.
     socket.readyState = ManualSocketMock.CLOSING;
     socket.deliver(64, 300);
-    expect(socket.commands).toEqual(['START 64 500']);
-    expect(lane.bytes).toBe(500 * 64 * KB);
+    expect(socket.commands).toEqual(['START 64 200']);
+    expect(lane.bytes).toBe(200 * 64 * KB);
   });
 
   it('neither refills nor counts once the lane is closed', async () => {
     vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
     const { lane, socket } = await openLane(64);
     lane.start();
-    socket.deliver(64, 399);
+    socket.deliver(64, 99);
     lane.close();
     socket.readyState = ManualSocketMock.OPEN;
     socket.deliver(64, 10);
-    expect(socket.commands).toEqual(['START 64 500', 'CLOSE']);
-    expect(lane.bytes).toBe(399 * 64 * KB);
+    expect(socket.commands).toEqual(['START 64 200', 'CLOSE']);
+    expect(lane.bytes).toBe(99 * 64 * KB);
   });
 
   it('stops refilling but keeps the socket open and counting after stopRequests', async () => {
     vi.stubGlobal('WebSocket', ManualSocketMock as unknown as typeof WebSocket);
     const { lane, socket } = await openLane(64);
     lane.start();
-    socket.deliver(64, 399);
+    socket.deliver(64, 99);
     lane.stopRequests();
     // Past the refill threshold, yet no new request.
     socket.deliver(64, 10);
-    expect(socket.commands).toEqual(['START 64 500']);
+    expect(socket.commands).toEqual(['START 64 200']);
     expect(socket.readyState).toBe(ManualSocketMock.OPEN);
-    expect(lane.bytes).toBe(409 * 64 * KB);
+    expect(lane.bytes).toBe(109 * 64 * KB);
     lane.close();
-    expect(socket.commands).toEqual(['START 64 500', 'CLOSE']);
+    expect(socket.commands).toEqual(['START 64 200', 'CLOSE']);
   });
 
   it('keeps the link loaded until the last loaded latency answer, with no refill after the stage', async () => {

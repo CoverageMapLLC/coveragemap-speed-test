@@ -50,6 +50,9 @@ describe('live measurement completion merge', () => {
         speedMbps: 80,
         snapshots: [],
         loadedLatency: mockLoadedLatency,
+        initialConnectionCount: 4,
+        requestedConnectionCount: 4,
+        connectionCount: 4,
       },
     });
 

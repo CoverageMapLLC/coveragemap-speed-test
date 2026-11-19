@@ -6,6 +6,7 @@ import type {
 } from '../types/speed-test.js';
 import { CancellationError } from '../utils/cancellation.js';
 import { SocketConnectError } from '../tests/sockets.js';
+import { SpeedTestError, getFailureReason, isSpeedTestFailureReason } from '../utils/failure.js';
 
 /**
  * Messages between the engine and the Web Worker that runs the test stages in browsers.
@@ -51,6 +52,8 @@ export type StageCommand = ({ type: 'run'; id: number } & StageRequest) | { type
 export interface SerializedError {
   name: string;
   message: string;
+  /** The error's failure reason (`SpeedTestError.reason`), absent when it has none. */
+  reason?: string;
 }
 
 /** Worker to engine. */
@@ -63,15 +66,22 @@ export type StageEvent =
   | { type: 'error'; id: number; error: SerializedError };
 
 export function serializeError(error: unknown): SerializedError {
-  if (error instanceof Error) return { name: error.name, message: error.message };
-  return { name: 'Error', message: String(error) };
+  if (!(error instanceof Error)) return { name: 'Error', message: String(error) };
+  const reason = getFailureReason(error);
+  return reason === 'unknown' ? { name: error.name, message: error.message } : { name: error.name, message: error.message, reason };
 }
 
-/** Rebuilds the error types the engine tells apart: cancellation and failed connections. */
+/**
+ * Rebuilds the error types the engine tells apart: cancellation, failed connections, and the
+ * failure reason of any other tagged error.
+ */
 export function deserializeError(error: SerializedError): Error {
   if (error.name === 'CancellationError') return new CancellationError();
-  if (error.name === 'SocketConnectError') return new SocketConnectError(error.message);
-  const rebuilt = new Error(error.message);
+  const reason = isSpeedTestFailureReason(error.reason) ? error.reason : null;
+  if (error.name === 'SocketConnectError') {
+    return new SocketConnectError(error.message, reason === 'connectionTimeout' ? 'connectionTimeout' : 'connectionFailed');
+  }
+  const rebuilt = reason ? new SpeedTestError(reason, error.message) : new Error(error.message);
   rebuilt.name = error.name;
   return rebuilt;
 }

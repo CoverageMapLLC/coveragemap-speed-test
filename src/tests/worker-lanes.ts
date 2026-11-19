@@ -5,6 +5,7 @@ import {
   type ThroughputLaneCallbacks,
   type ThroughputLaneOptions,
 } from './throughput-lanes.js';
+import { SpeedTestError, getFailureReason, type SpeedTestFailureReason } from '../utils/failure.js';
 import { isNodeRuntime, isTcpUrl, loadNodeWebSocket, loadTcpTransport, usesNodeWebSocket } from './sockets.js';
 
 /**
@@ -37,9 +38,18 @@ export type WorkerToHostMessage =
   | { type: 'open' }
   /** The lane counted its first bytes, sent once: the runner starts the ramp-up exclusion. */
   | { type: 'bytes' }
-  | { type: 'error'; message: string };
+  /** The sockets an `addConnections` opened settled (see `ThroughputLaneCallbacks.onScaleUpSettled`). */
+  | { type: 'scaleUpSettled'; scaleUpId: number; opened: number }
+  /** A socket added during the stage opened. */
+  | { type: 'connectionAdded' }
+  /** A socket failed; `reason` is the error's failure reason, so it survives the thread boundary. */
+  | { type: 'error'; message: string; reason: SpeedTestFailureReason };
 
-export type HostToWorkerMessage = { type: 'start' } | { type: 'stopRequests' } | { type: 'close' };
+export type HostToWorkerMessage =
+  | { type: 'start' }
+  | { type: 'stopRequests' }
+  | { type: 'close' }
+  | { type: 'addConnections'; count: number; messageSizeKb: number; scaleUpId: number };
 
 export interface LanePort {
   postMessage(message: WorkerToHostMessage): void;
@@ -95,7 +105,7 @@ export async function hostWorkerLane(port: LanePort, data: WorkerLaneData): Prom
   try {
     lane = openThroughputLane(data.direction, data, {
       onOpen: () => port.postMessage({ type: 'open' }),
-      onError: (error) => port.postMessage({ type: 'error', message: error.message }),
+      onError: (error) => port.postMessage({ type: 'error', message: error.message, reason: getFailureReason(error) }),
       onBytes: (bytes) => {
         Atomics.store(counters, data.slot, BigInt(bytes));
         if (!reportedBytes) {
@@ -103,9 +113,15 @@ export async function hostWorkerLane(port: LanePort, data: WorkerLaneData): Prom
           port.postMessage({ type: 'bytes' });
         }
       },
+      onScaleUpSettled: (scaleUpId, opened) => port.postMessage({ type: 'scaleUpSettled', scaleUpId, opened }),
+      onConnectionAdded: () => port.postMessage({ type: 'connectionAdded' }),
     });
   } catch (error) {
-    port.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });
+    port.postMessage({
+      type: 'error',
+      message: error instanceof Error ? error.message : String(error),
+      reason: getFailureReason(error),
+    });
     return;
   }
 
@@ -113,6 +129,7 @@ export async function hostWorkerLane(port: LanePort, data: WorkerLaneData): Prom
     if (message.type === 'start') lane.start();
     else if (message.type === 'stopRequests') lane.stopRequests();
     else if (message.type === 'close') lane.close();
+    else if (message.type === 'addConnections') lane.addConnections(message.count, message.messageSizeKb, message.scaleUpId);
   });
   port.postMessage({ type: 'ready' });
 }
@@ -170,6 +187,8 @@ export async function openWorkerLanes(
   if (shares.length < 2) return null;
 
   const counters = new SharedArrayBuffer(8 * shares.length);
+  /** Added sockets that opened, per lane. */
+  const addedOpened = shares.map(() => 0);
   const counterView = new BigInt64Array(counters);
   const workers: NodeWorker[] = [];
 
@@ -200,6 +219,7 @@ export async function openWorkerLanes(
             direction,
             serverUrl: options.serverUrl,
             messageSizeKb: options.messageSizeKb,
+            latencyMs: options.latencyMs,
             connectionCount,
             firstSocketIndex,
             counters,
@@ -223,7 +243,7 @@ export async function openWorkerLanes(
             if (readyCount === shares.length && state === 'pending') {
               state = 'resolved';
               for (; pendingOpens > 0; pendingOpens--) callbacks.onOpen();
-              resolve(workers.map((w, i) => createWorkerLane(w, counterView, i)));
+              resolve(workers.map((w, i) => createWorkerLane(w, counterView, i, shares[i], () => addedOpened[i])));
             }
             break;
           case 'unsupported':
@@ -237,11 +257,18 @@ export async function openWorkerLanes(
             // Lanes only count bytes after they start, which is after they were handed over.
             if (state === 'resolved') callbacks.onBytes?.(Number(Atomics.load(counterView, slot)));
             break;
+          case 'scaleUpSettled':
+            if (state === 'resolved') callbacks.onScaleUpSettled?.(message.scaleUpId, message.opened);
+            break;
+          case 'connectionAdded':
+            addedOpened[slot]++;
+            if (state === 'resolved') callbacks.onConnectionAdded?.();
+            break;
           case 'error':
             // A socket failed to connect. That fails the stage whether or not every worker
             // is ready yet.
-            if (state === 'resolved') callbacks.onError(new Error(message.message));
-            else abandon(new Error(message.message));
+            if (state === 'resolved') callbacks.onError(new SpeedTestError(message.reason, message.message));
+            else abandon(new SpeedTestError(message.reason, message.message));
             break;
         }
       });
@@ -257,8 +284,15 @@ export async function openWorkerLanes(
   });
 }
 
-function createWorkerLane(worker: NodeWorker, counters: BigInt64Array, slot: number): ThroughputLane {
+function createWorkerLane(
+  worker: NodeWorker,
+  counters: BigInt64Array,
+  slot: number,
+  connectionCount: number,
+  addedOpened: () => number
+): ThroughputLane {
   let closed = false;
+  let connections = connectionCount;
   return {
     start() {
       worker.postMessage({ type: 'start' });
@@ -273,8 +307,19 @@ function createWorkerLane(worker: NodeWorker, counters: BigInt64Array, slot: num
       worker.unref();
       setTimeout(() => void worker.terminate(), WORKER_CLOSE_GRACE_MS).unref?.();
     },
+    addConnections(count, messageSizeKb, scaleUpId) {
+      if (closed) return;
+      connections += count;
+      worker.postMessage({ type: 'addConnections', count, messageSizeKb, scaleUpId });
+    },
     get bytes() {
       return Number(Atomics.load(counters, slot));
+    },
+    get connectionCount() {
+      return connections;
+    },
+    get openedConnectionCount() {
+      return connectionCount + addedOpened();
     },
   };
 }

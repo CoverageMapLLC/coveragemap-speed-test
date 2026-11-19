@@ -42,7 +42,10 @@ class ThroughputSocketMock {
     }
 
     if (payload instanceof Uint8Array) {
+      // Queued until the next tick, as a socket reports it
+      this.bufferedAmount += payload.byteLength;
       setTimeout(() => {
+        this.bufferedAmount -= payload.byteLength;
         this.onmessage?.({ data: 'ACK' } as MessageEvent);
       }, 0);
     }
@@ -177,7 +180,7 @@ describe('throughput protocol runners', () => {
     expect(result.loadedLatency!.minLatency).toBeGreaterThan(0);
   });
 
-  it('requests a tripled download message size once 400 messages of the first batch arrived', async () => {
+  it('asks for the next batch at four times the size once 100 are due, before a speed is known', async () => {
     vi.useFakeTimers();
     ReplenishingDownloadSocketMock.commands = [];
     vi.stubGlobal('WebSocket', ReplenishingDownloadSocketMock as unknown as typeof WebSocket);
@@ -195,11 +198,11 @@ describe('throughput protocol runners', () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 500', 'START 192 500']);
+    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 200', 'START 256 200']);
 
     await vi.advanceTimersByTimeAsync(39);
     const result = await promise;
-    expect(result.bytes).toBe(64 * 1024 * 500);
+    expect(result.bytes).toBe(64 * 1024 * 200);
   });
 
   it('counts a message of the next batch that arrives before the first batch is done', async () => {
@@ -221,14 +224,14 @@ describe('throughput protocol runners', () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(ReentrantExtraFrameDownloadSocketMock.commands).toEqual([
-      'START 64 500',
-      'START 192 500',
+      'START 64 200',
+      'START 256 200',
     ]);
 
     await vi.advanceTimersByTimeAsync(39);
     const result = await promise;
-    // All 500 messages of the first batch plus the one 192 KB message of the second.
-    expect(result.bytes).toBe(64 * 1024 * 500 + 192 * 1024);
+    // All 200 messages of the first batch plus the one 256 KB message of the second.
+    expect(result.bytes).toBe(64 * 1024 * 200 + 256 * 1024);
   });
 
   it('completes download when loaded latency monitor receives no PONG samples', async () => {
@@ -353,5 +356,78 @@ describe('throughput protocol runners', () => {
     expect(result.loadedLatency).not.toBeNull();
     expect(result.loadedLatency!.latencies.length).toBeGreaterThan(0);
     expect(result.loadedLatency!.minLatency).toBeGreaterThan(0);
+  });
+});
+
+/** Opens and answers PING, but never sends download data or ACKs upload data. */
+class SilentSocketMock extends ThroughputSocketMock {
+  static instances: SilentSocketMock[] = [];
+
+  constructor(url: string) {
+    super(url);
+    SilentSocketMock.instances.push(this);
+  }
+
+  send(payload: string | Uint8Array): void {
+    if (payload === 'PING') super.send(payload);
+  }
+}
+
+describe('a throughput stage that moves no data', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    SilentSocketMock.instances = [];
+  });
+
+  const options = (durationMs: number) => ({
+    serverUrl: 'wss://speed.example.com/v1/ws',
+    messageSizeKb: 64,
+    connectionCount: 2,
+    durationMs,
+    latencyMs: 1,
+    jitterMs: 1,
+    cancellationToken: new CancellationToken(),
+  });
+
+  it.each([
+    ['download', runDownloadSpeedTest],
+    ['upload', runUploadSpeedTest],
+  ] as const)('fails a %s stage that ends with no bytes with transferTimeout, like the native engines', async (direction, run) => {
+    vi.useFakeTimers(FAKE_CLOCK);
+    vi.stubGlobal('WebSocket', SilentSocketMock as unknown as typeof WebSocket);
+    const promise = run(options(1500)).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(2000);
+    const error = (await promise) as { reason?: string; message?: string };
+    expect(error.reason).toBe('transferTimeout');
+    expect(error.message).toBe(`No ${direction} data in 1500 ms`);
+    // Every socket, the loaded latency one included, is closed.
+    expect(SilentSocketMock.instances.length).toBe(3);
+    expect(SilentSocketMock.instances.every((socket) => socket.readyState === ThroughputSocketMock.CLOSED)).toBe(true);
+  });
+
+  it('fails after TRANSFER_TIMEOUT_MS without waiting for the end of a longer stage', async () => {
+    const { TRANSFER_TIMEOUT_MS } = await import('../src/tests/throughput-runner.js');
+    vi.useFakeTimers(FAKE_CLOCK);
+    vi.stubGlobal('WebSocket', SilentSocketMock as unknown as typeof WebSocket);
+    let settledAt: number | null = null;
+    const promise = runDownloadSpeedTest(options(TRANSFER_TIMEOUT_MS + 5000)).catch((error: unknown) => {
+      settledAt = performance.now();
+      return error;
+    });
+    await vi.advanceTimersByTimeAsync(TRANSFER_TIMEOUT_MS + 100);
+    const error = (await promise) as { reason?: string; message?: string };
+    expect(error.reason).toBe('transferTimeout');
+    expect(error.message).toBe(`No download data after ${TRANSFER_TIMEOUT_MS} ms`);
+    expect(settledAt).not.toBeNull();
+  });
+
+  it('still passes a stage that moved some data, however little', async () => {
+    vi.useFakeTimers(FAKE_CLOCK);
+    vi.stubGlobal('WebSocket', ThroughputSocketMock as unknown as typeof WebSocket);
+    const promise = runDownloadSpeedTest(options(1500));
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await promise;
+    expect(result.bytes).toBeGreaterThan(0);
   });
 });

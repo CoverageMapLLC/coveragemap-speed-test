@@ -1,3 +1,4 @@
+import { getFirstDownloadMessageSizeKb, getFirstUploadChunkSizeKb } from '../utils/adaptive.js';
 import type { NetworkTestResultTestResults } from './test-results.js';
 
 export type SpeedTestStage =
@@ -45,6 +46,12 @@ export interface SpeedTestData {
   bytes: number;
   snapshots: SpeedSnapshot[];
   loadedLatency: LatencyTestData | null;
+  /** Connections the stage started with, picked from its estimate. */
+  initialConnectionCount: number;
+  /** Connections the stage asked for: the initial ones and the ones its scale-up added. */
+  requestedConnectionCount: number;
+  /** Connections that carried the stage: the initial ones and the added ones that opened. */
+  connectionCount: number;
 }
 
 export interface SpeedTestConfig {
@@ -97,9 +104,9 @@ export interface SpeedTestSelection {
 }
 
 export const DEFAULT_CONFIG: SpeedTestConfig = {
-  pingCount: 10,
-  downloadDurationMs: 10000,
-  uploadDurationMs: 10000,
+  pingCount: 15,
+  downloadDurationMs: 7000,
+  uploadDurationMs: 7000,
   snapshotIntervalMs: 100,
   latencyTimeoutMs: 10000,
   estimationTimeoutMs: 15000,
@@ -127,20 +134,24 @@ export interface SpeedTestCallbacks {
 }
 
 /**
- * Sockets for stages estimated at 1 Gbps or more. Twelve spread evenly over the six threads
- * the client uses and over the worker processes of a clustered server.
+ * Sockets for stages at 1 Gbps or more, and the most a stage's scale-up opens. Twelve spread
+ * evenly over the six threads the client uses and over the worker processes of a clustered
+ * server.
  */
-const MULTI_GIGABIT_CONNECTION_COUNT = 12;
+export const MAX_CONNECTION_COUNT = 12;
+const MULTI_GIGABIT_CONNECTION_COUNT = MAX_CONNECTION_COUNT;
 
-export function getDownloadMessageSizeKb(estimatedMbps: number): number {
-  if (estimatedMbps < 0.5) return 1;
-  if (estimatedMbps < 1) return 16;
-  if (estimatedMbps < 10) return 32;
-  if (estimatedMbps < 20) return 64;
-  if (estimatedMbps < 30) return 128;
-  if (estimatedMbps < 40) return 256;
-  if (estimatedMbps < 50) return 512;
-  return 1024;
+/**
+ * The download stage's first message size, in KiB, for an estimate of `estimatedMbps` spread
+ * over `connectionCount` connections: 2.5 ms of each connection's share (see
+ * `getFirstDownloadMessageSizeKb`). Later batches size themselves from what each connection
+ * measures.
+ */
+export function getDownloadMessageSizeKb(
+  estimatedMbps: number,
+  connectionCount = getDownloadConnectionCount(estimatedMbps)
+): number {
+  return getFirstDownloadMessageSizeKb(estimatedMbps / Math.max(connectionCount, 1));
 }
 
 export function getDownloadConnectionCount(estimatedMbps: number): number {
@@ -152,12 +163,16 @@ export function getDownloadConnectionCount(estimatedMbps: number): number {
   return MULTI_GIGABIT_CONNECTION_COUNT;
 }
 
-export function getUploadMessageSizeKb(estimatedMbps: number): number {
-  if (estimatedMbps < 0.5) return 1;
-  if (estimatedMbps < 1) return 16;
-  if (estimatedMbps < 10) return 128;
-  if (estimatedMbps < 50) return 512;
-  return 1024;
+/**
+ * The upload stage's first chunk size, in KiB, for an estimate of `estimatedMbps` spread over
+ * `connectionCount` connections: 2.5 ms of each connection's share, at most 1 MiB (see
+ * `getFirstUploadChunkSizeKb`). Each connection then resizes its chunks from what it measures.
+ */
+export function getUploadMessageSizeKb(
+  estimatedMbps: number,
+  connectionCount = getUploadConnectionCount(estimatedMbps)
+): number {
+  return getFirstUploadChunkSizeKb(estimatedMbps / Math.max(connectionCount, 1));
 }
 
 export function getUploadConnectionCount(estimatedMbps: number): number {

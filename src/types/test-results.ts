@@ -12,6 +12,7 @@ export type LocationType = 'device' | 'ip';
 
 export type TestStage =
   | 'latencyStart'
+  | 'latencyEnd'
   | 'downloadStart'
   | 'downloadEnd'
   | 'uploadStart'
@@ -96,8 +97,35 @@ export interface NetworkTestResultTestType {
   downloadTestDuration: number | null;
   uploadTestDuration: number | null;
   testProtocol: string;
+  /**
+   * Connections that carried the download stage at its end (the established count), including
+   * ones its scale-up added. Null when the stage did not complete.
+   */
   downloadConnectionCount: number | null;
+  /**
+   * Connections that carried the upload stage at its end (the established count), including
+   * ones its scale-up added. Null when the stage did not complete.
+   */
   uploadConnectionCount: number | null;
+  /**
+   * Connections the download stage started with, picked from its estimate (its tier). Lower than
+   * `downloadConnectionCount` when the scale-up added some. Null when download estimation did not
+   * complete.
+   */
+  initialDownloadConnectionCount?: number | null;
+  /** Like `initialDownloadConnectionCount`, for the upload stage. */
+  initialUploadConnectionCount?: number | null;
+  /**
+   * Connections the download stage asked for: its tier, and the ones its scale-up added. The tier
+   * alone when the stage did not complete. Null when download estimation did not complete.
+   */
+  requestedDownloadConnectionCount: number | null;
+  /** Download connections that opened, added ones included. Null when the download stage did not complete. */
+  establishedDownloadConnectionCount: number | null;
+  /** Like `requestedDownloadConnectionCount`, for the upload stage. */
+  requestedUploadConnectionCount: number | null;
+  /** Upload connections that opened, added ones included. Null when the upload stage did not complete. */
+  establishedUploadConnectionCount: number | null;
   downloadPacketSize: number | null;
   uploadPacketSize: number | null;
 }
@@ -170,17 +198,25 @@ export interface NetworkTestResultWiredInfo {
 
 export interface NetworkTestResultMeasurements {
   dateTime: string | null;
+  /** Mbps from download estimation, rounded to 3 decimals. Null when estimation did not complete. */
+  estimatedDownloadSpeed: number | null;
+  /** Mbps from upload estimation, rounded to 3 decimals. Null when estimation did not complete. */
+  estimatedUploadSpeed: number | null;
   downloadSpeed: number | null;
   totalDownload: number | null;
   uploadSpeed: number | null;
   totalUpload: number | null;
+  /** Minimum round trip of the latency stage. Null when the latency stage was not enabled. */
   latency: number | null;
+  /** Median jitter of the latency stage. Null when the latency stage was not enabled. */
   jitter: number | null;
+  /** Every latency stage round trip. Null when the latency stage was not enabled. */
   latenciesList: number[] | null;
   loadedDownloadLatencies: number[] | null;
   loadedUploadLatencies: number[] | null;
   downloadList: NetworkTestResultSpeedTimePair[] | null;
   uploadList: NetworkTestResultSpeedTimePair[] | null;
+  /** `"<reason>: <message>"` (see `SpeedTestFailureReason`), or `"Cancelled"`. Null when the test passed. */
   failedReason: string | null;
   failedStage: TestStage | null;
 }

@@ -20,6 +20,7 @@ import { STAGE_WORKER_SOURCE } from '../src/browser/stage-worker-source.generate
 import { SocketConnectError } from '../src/tests/sockets.js';
 import type { LatencyTestData, SpeedEstimationResult, SpeedSnapshot, SpeedTestData } from '../src/types/speed-test.js';
 import { CancellationError, CancellationToken } from '../src/utils/cancellation.js';
+import { SpeedTestError, formatFailedReason } from '../src/utils/failure.js';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -146,6 +147,28 @@ describe('stage protocol errors', () => {
     expect(other.message).toBe('bad');
     expect(serializeError('text')).toEqual({ name: 'Error', message: 'text' });
   });
+
+  it('keeps the failure reason of tagged errors', () => {
+    const timedOut = deserializeError(serializeError(new SocketConnectError('not open', 'connectionTimeout')));
+    expect(timedOut).toBeInstanceOf(SocketConnectError);
+    expect(timedOut).toMatchObject({ reason: 'connectionTimeout' });
+    expect(formatFailedReason(timedOut)).toBe('connectionTimeout: not open');
+
+    const refused = deserializeError(serializeError(new SocketConnectError('refused')));
+    expect(refused).toMatchObject({ reason: 'connectionFailed' });
+
+    const stalled = deserializeError(serializeError(new SpeedTestError('transferTimeout', 'Test never started')));
+    expect(stalled).toBeInstanceOf(SpeedTestError);
+    expect(stalled.name).toBe('SpeedTestError');
+    expect(formatFailedReason(stalled)).toBe('transferTimeout: Test never started');
+
+    // Untagged errors carry no reason and stay unknown.
+    expect(serializeError(new TypeError('bad'))).toEqual({ name: 'TypeError', message: 'bad' });
+    expect(formatFailedReason(deserializeError(serializeError(new TypeError('bad'))))).toBe('unknown: bad');
+    expect(formatFailedReason(deserializeError({ name: 'Error', message: 'odd', reason: 'nonsense' }))).toBe(
+      'unknown: odd'
+    );
+  });
 });
 
 describe('serveStages (worker side)', () => {
@@ -230,7 +253,7 @@ describe('serveStages (worker side)', () => {
     const { send, until } = servedChannel();
     send({ type: 'run', id: 5, stage: 'latency', options: { serverUrl, pingCount: 5, timeoutMs: 3000 } });
     const result = await until((event) => idOf(event) === 5 && event.type === 'error');
-    expect(result).toMatchObject({ error: { name: 'SocketConnectError' } });
+    expect(result).toMatchObject({ error: { name: 'SocketConnectError', reason: 'connectionFailed' } });
   });
 
   it('reports an unknown stage as an error', async () => {
@@ -295,7 +318,10 @@ describe('startStageWorker (engine side)', () => {
       });
       expect(data.bytes).toBeGreaterThan(0);
       expect(snapshots.length).toBeGreaterThanOrEqual(3);
-      expect(data.snapshots).toEqual(snapshots);
+      // Progress carries the live speed, which blends into the measured speed after the
+      // measurement start; its times and bytes are the stored snapshots'.
+      const timesAndBytes = (list: SpeedSnapshot[]) => list.map(({ timeOffsetMs, bytes }) => ({ timeOffsetMs, bytes }));
+      expect(timesAndBytes(data.snapshots)).toEqual(timesAndBytes(snapshots));
     }
   });
 
@@ -338,9 +364,9 @@ describe('startStageWorker (engine side)', () => {
   it('passes connection errors through as SocketConnectError', async () => {
     const serverUrl = await closedUrl();
     const runner = await startedRunner();
-    await expect(
-      runner.runLatencyTest({ serverUrl, pingCount: 5, timeoutMs: 3000, cancellationToken: new CancellationToken() })
-    ).rejects.toBeInstanceOf(SocketConnectError);
+    const latency = runner.runLatencyTest({ serverUrl, pingCount: 5, timeoutMs: 3000, cancellationToken: new CancellationToken() });
+    await expect(latency).rejects.toBeInstanceOf(SocketConnectError);
+    await expect(latency).rejects.toMatchObject({ reason: 'connectionFailed' });
   });
 
   it('resolves null when the worker cannot be created', async () => {

@@ -323,11 +323,11 @@ This significantly reduces test duration (from ~30 seconds for a full run to a f
 |---|---|---|
 | Download speed | `results.measurements.downloadSpeed` | Final sustained Mbps |
 | Upload speed | `results.measurements.uploadSpeed` | Final sustained Mbps |
-| Latency | `results.measurements.latency` | Round-trip time in ms |
-| Jitter | `results.measurements.jitter` | Latency variance in ms |
+| Latency | `results.measurements.latency` | Minimum round-trip time in ms; `null` when the latency stage was disabled |
+| Jitter | `results.measurements.jitter` | Median jitter in ms; `null` when the latency stage was disabled |
 | Run ID | `testType.id` | Unique per test run — use for deduplication |
 | Session ID | `testType.sessionId` | Stable per engine instance — groups runs from one process |
-| Failure reason | `results.measurements.failedReason` | Non-null when a run did not complete |
+| Failure reason | `results.measurements.failedReason` | `"<reason>: <message>"` (or `"Cancelled"`) when a run did not complete |
 | Failed stage | `results.measurements.failedStage` | Which stage failed, if any |
 | Server used | `results.server` | Which test server was selected |
 | Timestamp | `results.dateTime` | ISO timestamp of the completed run |
@@ -339,6 +339,7 @@ This significantly reduces test duration (from ~30 seconds for a full run to a f
 - If `failedStage` is `latencyStart` or earlier, the connection could not be established at all.
 - If `failedStage` is `downloadStart` or later, latency data is likely still valid.
 - If `failedReason` is null and all measurement fields are populated, the run was fully successful.
+- The part of `failedReason` before the first `: ` is a fixed vocabulary (`unreachable`, `connectionFailed`, `connectionTimeout`, `transferTimeout`, `timeout`, `protocolError`, `unknown`) to group failures by; the rest is a message for people. See [Result schema](./result-schema.md#failedreason).
 
 The engine automatically retries failed result uploads in the background on subsequent runs. No manual retry logic is needed for the upload path.
 

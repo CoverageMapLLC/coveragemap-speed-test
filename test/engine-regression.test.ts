@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NetworkTestResultTestResults } from '../src/types/test-results.js';
 import { CancellationError } from '../src/utils/cancellation.js';
+import { SpeedTestError } from '../src/utils/failure.js';
+import { SocketConnectError } from '../src/tests/sockets.js';
 import { mockLoadedLatency } from './fixtures/speed-test-data.js';
 
 const mocks = vi.hoisted(() => ({
@@ -93,20 +95,28 @@ beforeEach(() => {
     bytes: 300_000,
     speedMbps: 18.4,
   });
-  mocks.downloadSpeedMock.mockResolvedValue({
+  // The stage carried the connections it started with: no scale-up
+  const connections = (options: { connectionCount: number }) => ({
+    initialConnectionCount: options.connectionCount,
+    requestedConnectionCount: options.connectionCount,
+    connectionCount: options.connectionCount,
+  });
+  mocks.downloadSpeedMock.mockImplementation(async (options: { connectionCount: number }) => ({
     durationMs: 2000,
     bytes: 4_000_000,
     speedMbps: 120,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
     loadedLatency: mockLoadedLatency,
-  });
-  mocks.uploadSpeedMock.mockResolvedValue({
+    ...connections(options),
+  }));
+  mocks.uploadSpeedMock.mockImplementation(async (options: { connectionCount: number }) => ({
     durationMs: 2000,
     bytes: 2_000_000,
     speedMbps: 60,
     snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
     loadedLatency: mockLoadedLatency,
-  });
+    ...connections(options),
+  }));
   mocks.uploadResultsMock.mockResolvedValue(undefined);
 });
 
@@ -219,6 +229,9 @@ describe('engine regression', () => {
         speedMbps: 120,
         snapshots: [{ timeOffsetMs: 100, speedMbps: 100, bytes: 1_000_000 }],
         loadedLatency: mockLoadedLatency,
+        initialConnectionCount: 6,
+        requestedConnectionCount: 6,
+        connectionCount: 6,
       },
       {
         durationMs: 2000,
@@ -226,6 +239,9 @@ describe('engine regression', () => {
         speedMbps: 60,
         snapshots: [{ timeOffsetMs: 100, speedMbps: 50, bytes: 500_000 }],
         loadedLatency: mockLoadedLatency,
+        initialConnectionCount: 6,
+        requestedConnectionCount: 6,
+        connectionCount: 6,
       },
       result
     );
@@ -553,7 +569,11 @@ describe('engine regression', () => {
     expect(mocks.downloadSpeedMock).not.toHaveBeenCalled();
     expect(mocks.uploadEstimationMock).toHaveBeenCalledTimes(1);
     expect(mocks.uploadSpeedMock).toHaveBeenCalledTimes(1);
-    expect(result.results.measurements.latency).toBe(10);
+    // The single ping only normalizes the later stages' timing; it is not the result's latency.
+    expect(mocks.uploadEstimationMock).toHaveBeenCalledWith(expect.objectContaining({ latencyMs: 10, jitterMs: 1 }));
+    expect(result.results.measurements.latency).toBeNull();
+    expect(result.results.measurements.jitter).toBeNull();
+    expect(result.results.measurements.latenciesList).toBeNull();
     expect(result.results.measurements.downloadSpeed).toBeNull();
     expect(result.results.measurements.uploadSpeed).toBe(60);
   });
@@ -676,7 +696,7 @@ describe('engine regression', () => {
     });
 
     expect(onError).toHaveBeenCalledWith(stageError, 'download');
-    expect(result.results.measurements.failedReason).toBe('download stage exploded');
+    expect(result.results.measurements.failedReason).toBe('unknown: download stage exploded');
     expect(result.results.measurements.failedStage).toBe('downloadStart');
   });
 
@@ -707,7 +727,7 @@ describe('engine regression', () => {
     });
 
     expect(onError).toHaveBeenCalledWith(latencyError, 'latency');
-    expect(result.results.measurements.failedReason).toBe('latency stage exploded');
+    expect(result.results.measurements.failedReason).toBe('unknown: latency stage exploded');
     expect(result.results.measurements.failedStage).toBe('latencyStart');
     expect(result.results.measurements.latenciesList).toBeNull();
     expect(result.results.measurements.latency).toBeNull();
@@ -966,9 +986,9 @@ describe('engine regression', () => {
     });
 
     // Provider is called once upfront (server selection) + once per stage boundary.
-    // Default test selection: latencyStart, downloadStart, downloadEnd, uploadStart, uploadEnd = 5 stage calls.
-    // Total = 1 (initial) + 5 (stage boundaries) = 6 calls.
-    expect(locationProvider.mock.calls.length).toBe(6);
+    // Default test selection: latencyStart, latencyEnd, downloadStart, downloadEnd, uploadStart, uploadEnd = 6 stage calls.
+    // Total = 1 (initial) + 6 (stage boundaries) = 7 calls.
+    expect(locationProvider.mock.calls.length).toBe(7);
 
     // Each stage record should have a distinct location stamped at that boundary.
     const latitudes = result.stages?.map((s) => s.location?.latitude) ?? [];
@@ -1148,15 +1168,17 @@ describe('engine regression', () => {
     });
 
     expect(result.testType.testsRun).toEqual({ latency: true, download: true, upload: true });
-    // Mock download estimation returns 26.6 Mbps → packetSize=128 KB (20–30 range), connectionCount=6
-    expect(result.testType.downloadPacketSize).toBe(128);
+    // Mock download estimation returns 26.6 Mbps → 6 connections, a first message of 2.5 ms of
+    // 4.4 Mbps (1.4 KB) → 1 KiB
+    expect(result.testType.downloadPacketSize).toBe(1);
     expect(result.testType.downloadConnectionCount).toBe(6);
-    // Mock upload estimation returns 18.4 Mbps → packetSize=512 KB (10–50 range), connectionCount=6
-    expect(result.testType.uploadPacketSize).toBe(512);
+    // Mock upload estimation returns 18.4 Mbps → 6 connections, a first chunk of 2.5 ms of
+    // 3.1 Mbps (1 KB) → 1 KiB
+    expect(result.testType.uploadPacketSize).toBe(1);
     expect(result.testType.uploadConnectionCount).toBe(6);
-    // Durations reflect the default config (10 s)
-    expect(result.testType.downloadTestDuration).toBe(10000);
-    expect(result.testType.uploadTestDuration).toBe(10000);
+    // Durations reflect the default config (7 s)
+    expect(result.testType.downloadTestDuration).toBe(7000);
+    expect(result.testType.uploadTestDuration).toBe(7000);
   });
 
   it('sets download testsRun flag and related testType fields to null/false when download is disabled', async () => {
@@ -1186,9 +1208,9 @@ describe('engine regression', () => {
     expect(result.testType.downloadConnectionCount).toBeNull();
     expect(result.testType.downloadTestDuration).toBeNull();
     // Upload fields should still be populated
-    expect(result.testType.uploadPacketSize).toBe(512);
+    expect(result.testType.uploadPacketSize).toBe(1);
     expect(result.testType.uploadConnectionCount).toBe(6);
-    expect(result.testType.uploadTestDuration).toBe(10000);
+    expect(result.testType.uploadTestDuration).toBe(7000);
   });
 
   it('sets upload testsRun flag and related testType fields to null/false when upload is disabled', async () => {
@@ -1218,9 +1240,9 @@ describe('engine regression', () => {
     expect(result.testType.uploadConnectionCount).toBeNull();
     expect(result.testType.uploadTestDuration).toBeNull();
     // Download fields should still be populated
-    expect(result.testType.downloadPacketSize).toBe(128);
+    expect(result.testType.downloadPacketSize).toBe(1);
     expect(result.testType.downloadConnectionCount).toBe(6);
-    expect(result.testType.downloadTestDuration).toBe(10000);
+    expect(result.testType.downloadTestDuration).toBe(7000);
   });
 
   it('leaves testType connection/packet fields null when estimation fails before populating them', async () => {
@@ -1252,7 +1274,7 @@ describe('engine regression', () => {
     // Upload never ran since the error aborted the test
     expect(result.testType.uploadPacketSize).toBeNull();
     expect(result.testType.uploadConnectionCount).toBeNull();
-    expect(result.results.measurements.failedReason).toBe('estimation timeout');
+    expect(result.results.measurements.failedReason).toBe('unknown: estimation timeout');
   });
 
   it('runs against a self-hosted server object and preserves selfHosted on results.server', async () => {
@@ -1307,5 +1329,216 @@ describe('engine regression', () => {
     expect(uploaded).toHaveLength(1);
     expect(uploaded[0].results.server).toEqual(selfHostedServer);
     expect(uploaded[0].results.server?.selfHosted).toBe(true);
+  });
+});
+
+describe('standard result format', () => {
+  const server = {
+    id: 'srv-1',
+    domain: 'speed.example.com',
+    port: 443,
+    provider: null,
+    city: null,
+    region: null,
+    country: 'US',
+    location: 'US',
+    latitude: null,
+    longitude: null,
+    distance: null,
+    isCDN: null,
+  };
+
+  const markers = (result: NetworkTestResultTestResults) => result.stages?.map((stage) => stage.testStage);
+
+  it('uses 15 pings and 7 s throughput stages by default', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    await new SpeedTestEngine({ application: applicationMetadata }).run(server);
+    expect(mocks.latencyMock).toHaveBeenCalledWith(expect.objectContaining({ pingCount: 15 }));
+    expect(mocks.downloadSpeedMock).toHaveBeenCalledWith(expect.objectContaining({ durationMs: 7000 }));
+    expect(mocks.uploadSpeedMock).toHaveBeenCalledWith(expect.objectContaining({ durationMs: 7000 }));
+  });
+
+  it('records start and end markers for every phase, latencyEnd included', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const result = await new SpeedTestEngine({ application: applicationMetadata }).run(server);
+    expect(markers(result)).toEqual([
+      'latencyStart',
+      'latencyEnd',
+      'downloadStart',
+      'downloadEnd',
+      'uploadStart',
+      'uploadEnd',
+    ]);
+  });
+
+  it('reports estimated speeds rounded to 3 decimals', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.downloadEstimationMock.mockResolvedValueOnce({ durationMs: 120, bytes: 400_000, speedMbps: 26.66666 });
+    mocks.uploadEstimationMock.mockResolvedValueOnce({ durationMs: 130, bytes: 300_000, speedMbps: 18.40004 });
+    const result = await new SpeedTestEngine({ application: applicationMetadata }).run(server);
+    expect(result.results.measurements.estimatedDownloadSpeed).toBe(26.667);
+    expect(result.results.measurements.estimatedUploadSpeed).toBe(18.4);
+  });
+
+  it('reports requested and established connection counts', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.downloadEstimationMock.mockResolvedValueOnce({ durationMs: 120, bytes: 400_000, speedMbps: 2500 });
+    const result = await new SpeedTestEngine({ application: applicationMetadata }).run(server);
+    expect(result.testType).toMatchObject({
+      initialDownloadConnectionCount: 12,
+      requestedDownloadConnectionCount: 12,
+      establishedDownloadConnectionCount: 12,
+      downloadConnectionCount: 12,
+      initialUploadConnectionCount: 6,
+      requestedUploadConnectionCount: 6,
+      establishedUploadConnectionCount: 6,
+      uploadConnectionCount: 6,
+    });
+  });
+
+  it('reports the connections a scale-up added, next to the ones the stage started with', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    // A collapsed estimate started the download on 2 connections; the stage scaled up to 8, and
+    // one of the added connections never opened.
+    mocks.downloadEstimationMock.mockResolvedValueOnce({ durationMs: 120, bytes: 10_240, speedMbps: 0.7 });
+    mocks.downloadSpeedMock.mockImplementationOnce(async () => ({
+      durationMs: 7000,
+      bytes: 700_000_000,
+      speedMbps: 900,
+      snapshots: [],
+      loadedLatency: mockLoadedLatency,
+      initialConnectionCount: 2,
+      requestedConnectionCount: 8,
+      connectionCount: 7,
+    }));
+    const result = await new SpeedTestEngine({ application: applicationMetadata }).run(server);
+    expect(mocks.downloadSpeedMock).toHaveBeenCalledWith(expect.objectContaining({ connectionCount: 2 }));
+    expect(result.testType).toMatchObject({
+      initialDownloadConnectionCount: 2,
+      requestedDownloadConnectionCount: 8,
+      establishedDownloadConnectionCount: 7,
+      downloadConnectionCount: 7,
+    });
+  });
+
+  it('leaves estimated speeds and connection counts null for phases that were not run', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const result = await new SpeedTestEngine({
+      application: applicationMetadata,
+      tests: { latency: true, download: false, upload: false },
+    }).run(server);
+    expect(result.results.measurements.estimatedDownloadSpeed).toBeNull();
+    expect(result.results.measurements.estimatedUploadSpeed).toBeNull();
+    expect(result.testType).toMatchObject({
+      requestedDownloadConnectionCount: null,
+      establishedDownloadConnectionCount: null,
+      requestedUploadConnectionCount: null,
+      establishedUploadConnectionCount: null,
+    });
+    expect(markers(result)).toEqual(['latencyStart', 'latencyEnd']);
+  });
+
+  it('records the end marker of a failed throughput stage and keeps the tier it asked for', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.downloadSpeedMock.mockRejectedValueOnce(new SocketConnectError('Download WebSocket connection 3 failed'));
+    const result = await new SpeedTestEngine({ application: applicationMetadata }).run(server);
+    expect(markers(result)).toEqual(['latencyStart', 'latencyEnd', 'downloadStart', 'downloadEnd']);
+    expect(result.results.testStatus).toBe('failed');
+    expect(result.results.measurements.failedStage).toBe('downloadStart');
+    expect(result.results.measurements.failedReason).toBe('connectionFailed: Download WebSocket connection 3 failed');
+    // Estimation finished, the throughput stage did not.
+    expect(result.results.measurements.estimatedDownloadSpeed).toBe(26.6);
+    expect(result.testType).toMatchObject({
+      requestedDownloadConnectionCount: 6,
+      establishedDownloadConnectionCount: null,
+      downloadConnectionCount: null,
+    });
+    expect(mocks.uploadResultsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('records latencyEnd when the latency stage fails', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.latencyMock.mockRejectedValueOnce(new SpeedTestError('timeout', 'Latency test timed out'));
+    const result = await new SpeedTestEngine({ application: applicationMetadata }).run(server);
+    expect(markers(result)).toEqual(['latencyStart', 'latencyEnd']);
+    expect(result.results.measurements.failedStage).toBe('latencyStart');
+    expect(result.results.measurements.failedReason).toBe('timeout: Latency test timed out');
+  });
+
+  it('records uploadEnd when upload estimation fails', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.uploadEstimationMock.mockRejectedValueOnce(
+      new SpeedTestError('connectionTimeout', 'Upload estimation timed out after 15000ms. Connected: false, Retries: 0')
+    );
+    const result = await new SpeedTestEngine({ application: applicationMetadata }).run(server);
+    expect(markers(result)).toEqual([
+      'latencyStart',
+      'latencyEnd',
+      'downloadStart',
+      'downloadEnd',
+      'uploadStart',
+      'uploadEnd',
+    ]);
+    expect(result.results.measurements.failedStage).toBe('uploadStart');
+    expect(result.results.measurements.failedReason).toBe(
+      'connectionTimeout: Upload estimation timed out after 15000ms. Connected: false, Retries: 0'
+    );
+    expect(result.results.measurements.estimatedUploadSpeed).toBeNull();
+  });
+
+  it('records no end marker for a cancelled phase', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.downloadSpeedMock.mockRejectedValueOnce(new CancellationError());
+    const result = await new SpeedTestEngine({ application: applicationMetadata }).run(server);
+    expect(markers(result)).toEqual(['latencyStart', 'latencyEnd', 'downloadStart']);
+    expect(result.results.measurements.failedReason).toBe('Cancelled');
+    expect(mocks.uploadResultsMock).not.toHaveBeenCalled();
+  });
+
+  it('runs the latency normalization ping inside the first phase when the latency stage is off', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const onComplete = vi.fn();
+    const result = await new SpeedTestEngine({
+      application: applicationMetadata,
+      tests: { latency: false, download: true, upload: true },
+      callbacks: { onComplete },
+    }).run(server);
+    expect(mocks.latencyMock).toHaveBeenCalledTimes(1);
+    expect(mocks.latencyMock).toHaveBeenCalledWith(expect.objectContaining({ pingCount: 1 }));
+    expect(mocks.downloadEstimationMock).toHaveBeenCalledWith(expect.objectContaining({ latencyMs: 10, jitterMs: 1 }));
+    expect(mocks.uploadEstimationMock).toHaveBeenCalledWith(expect.objectContaining({ latencyMs: 10, jitterMs: 1 }));
+    expect(markers(result)).toEqual(['downloadStart', 'downloadEnd', 'uploadStart', 'uploadEnd']);
+    expect(result.results.measurements).toMatchObject({ latency: null, jitter: null, latenciesList: null });
+    expect(onComplete.mock.calls[0][0]).toBeNull();
+    const uploaded = mocks.uploadResultsMock.mock.calls[0][0] as NetworkTestResultTestResults[];
+    expect(uploaded[0].results.measurements).toMatchObject({ latency: null, jitter: null, latenciesList: null });
+  });
+
+  it('fails the first phase when the latency normalization ping fails', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    mocks.latencyMock.mockRejectedValueOnce(new SocketConnectError('Connection not open after 3000ms', 'connectionTimeout'));
+    const result = await new SpeedTestEngine({
+      application: applicationMetadata,
+      tests: { latency: false, download: true, upload: true },
+    }).run(server);
+    expect(result.results.testStatus).toBe('failed');
+    expect(result.results.measurements.failedStage).toBe('downloadStart');
+    expect(result.results.measurements.failedReason).toBe('connectionTimeout: Connection not open after 3000ms');
+    expect(markers(result)).toEqual(['downloadStart', 'downloadEnd']);
+    expect(mocks.downloadEstimationMock).not.toHaveBeenCalled();
+  });
+
+  it('reports a failure on a second run as failed, not passed', async () => {
+    const { SpeedTestEngine } = await import('../src/engine.js');
+    const engine = new SpeedTestEngine({
+      application: applicationMetadata,
+      tests: { latency: false, download: true, upload: false },
+    });
+    await engine.run(server);
+    mocks.latencyMock.mockRejectedValueOnce(new Error('probe failed'));
+    const result = await engine.run(server);
+    expect(result.results.testStatus).toBe('failed');
+    expect(result.results.measurements.failedStage).toBe('downloadStart');
+    expect(result.results.measurements.failedReason).toBe('unknown: probe failed');
   });
 });

@@ -167,8 +167,8 @@ describe('throughput threads', () => {
 
     send({ type: 'start' });
     expect(LaneSocketMock.instances.map((socket) => socket.sent)).toEqual([
-      ['START 2 500'],
-      ['START 2 500'],
+      ['START 2 200'],
+      ['START 2 200'],
     ]);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -181,6 +181,35 @@ describe('throughput threads', () => {
 
     send({ type: 'close' });
     expect(LaneSocketMock.instances.every((socket) => socket.readyState === LaneSocketMock.CLOSED)).toBe(true);
+  });
+
+  it('adds sockets on request during the stage and reports when they settled', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', LaneSocketMock as unknown as typeof WebSocket);
+    const counters = new SharedArrayBuffer(8);
+    const { port, posted, send } = createPort();
+
+    hostWorkerLane(port, {
+      direction: 'download',
+      serverUrl: 'wss://speed.example.com/v1/ws',
+      connectionCount: 1,
+      messageSizeKb: 2,
+      counters,
+      slot: 0,
+      webSocketSource: getWebSocketSource() as string,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    send({ type: 'start' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    send({ type: 'addConnections', count: 2, messageSizeKb: 8, scaleUpId: 3 });
+    expect(LaneSocketMock.instances).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(5);
+    // The added sockets start at once with the size they were given, and settle once they
+    // counted their first bytes
+    expect(LaneSocketMock.instances.slice(1).map((socket) => socket.sent[0])).toEqual(['START 8 200', 'START 8 200']);
+    expect(posted).toContainEqual({ type: 'scaleUpSettled', scaleUpId: 3, opened: 2 });
+    send({ type: 'close' });
   });
 
   it('rejects when a socket fails before the lane opens instead of waiting forever', async () => {

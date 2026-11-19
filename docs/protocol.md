@@ -78,7 +78,7 @@ Each phase is designed to be cancellable, resilient to transient failures, and p
 │  │  2. getServers()         ──────────────────────────────► │──┼──► GET /v1/list?lat&lng
 │  │  3. runLatencyTest()     ──────────────────────────────► │──┼──► TCP/WS/WSS  PING/PONG
 │  │  4. runDownloadEstimation() ──────────────────────────► │──┼──► TCP/WS/WSS  START <kb> 1
-│  │  5. runDownloadSpeedTest()  ──────────────────────────► │──┼──► TCP/WS/WSS  START <kb> 500
+│  │  5. runDownloadSpeedTest()  ──────────────────────────► │──┼──► TCP/WS/WSS  START <kb> 200
 │  │  6. runUploadEstimation()   ──────────────────────────► │──┼──► TCP/WS/WSS  binary chunks
 │  │  7. runUploadSpeedTest()    ──────────────────────────► │──┼──► TCP/WS/WSS  binary chunks
 │  │  8. uploadResults()         ──────────────────────────► │──┼──► POST /api/v1/speedTests
@@ -222,7 +222,7 @@ Raw TCP saves the client the WebSocket mask on every uploaded byte and lets it c
 
 In a browser, the page's main thread also renders the page and runs the application. While it is busy, socket events and timers wait: snapshots and acknowledgements arrive late, uploads are refilled late, and pings look slower. A page that redraws charts on every progress callback can measure far below the link's speed.
 
-So in browsers the engine runs every stage (latency, both estimations, download, upload, and the loaded latency monitor) in a dedicated Web Worker, unless `config.browserWorker` is `false`. The engine stays on the main thread and talks to the worker by message: it sends each stage's options and a cancel message, and receives pings, snapshots, results, and errors. Timing happens inside the worker, so it does not depend on the page. Callbacks still run on the main thread, so a busy page may show progress a little late, but the numbers are not affected.
+So in browsers the engine runs every stage (latency, both estimations, download, upload, and the loaded latency monitor) in a dedicated Web Worker, unless `config.browserWorker` is `false`. The upload phase gets a new worker after a download phase, so the download sockets are dropped at once (see [Stage 3](#stage-3--download-throughput) on `CLOSE`). The engine stays on the main thread and talks to the worker by message: it sends each stage's options and a cancel message, and receives pings, snapshots, results, and errors. Timing happens inside the worker, so it does not depend on the page. Callbacks still run on the main thread, so a busy page may show progress a little late, but the numbers are not affected.
 
 The worker script is built into the library and started from a `blob:` URL. It needs no bundler configuration or extra file. The engine falls back to the main thread, with the same results as before, when:
 
@@ -249,7 +249,7 @@ engine.run() called
        │    └────────────────────────────────────────────────────────────┘
        │
        ├─ Stage 2: downloadEstimation ──────────────────────────────────┐
-       │    │  1 socket, adaptive payload doubling                      │
+       │    │  1 socket, rounds tripling in size                         │
        │    │  → SpeedEstimationResult (speedMbps → determines config)  │
        │    └────────────────────────────────────────────────────────────┘
        │
@@ -283,12 +283,13 @@ Stage markers recorded in the result payload:
 | Stage(s) | Marker recorded |
 |---|---|
 | Before latency | `latencyStart` |
+| After latency | `latencyEnd` |
 | Before downloadEstimation | `downloadStart` |
 | After download | `downloadEnd` |
 | Before uploadEstimation | `uploadStart` |
 | After upload | `uploadEnd` |
 
-Each marker snapshot captures: timestamp, connection type, external IP, and location.
+Each marker snapshot captures: timestamp (ISO 8601 UTC), connection type, external IP, ISP, location, and network details. Markers are recorded only for enabled stages. An end marker is recorded whenever its phase ran and ended, whether it passed or failed: a failed download phase records `downloadStart` and `downloadEnd`, and `failedStage` says which phase failed. A cancelled run records no end marker for the phase it was cancelled in (it is not uploaded either).
 
 ---
 
@@ -333,11 +334,15 @@ From the raw list of RTT samples `latencies[]`:
 
 The downstream stages use `minLatency` and `minJitter` (the most optimistic estimates) for timing normalization, since those reflect the best achievable network conditions and give the most conservative throughput correction.
 
+#### When the latency stage is disabled
+
+With `tests.latency: false`, the later stages still need a latency to subtract. The first enabled download or upload phase therefore starts with one silent `PING` (after its `downloadStart` or `uploadStart` marker, like the native engine) and uses that round trip for normalization only. It is not reported: the result's `latency`, `jitter`, and `latenciesList` are `null`, `onLatencyPing` and `onLatencyResult` do not fire, and no `latencyStart`/`latencyEnd` markers are recorded. If that ping fails, the phase it belongs to fails.
+
 #### Timeouts and Defaults
 
 | Parameter | Default | Configurable range |
 |---|---|---|
-| `pingCount` | 10 | 5 – 50 |
+| `pingCount` | 15 | 5 – 50 |
 | `latencyTimeoutMs` | 10,000 ms | 3,000 – 30,000 ms |
 
 ---
@@ -353,40 +358,61 @@ Client ──── Uint8Array(512) (warmup binary frame) ───► Server
   [10 ms delay]
 Client ──── "START <kb> 1" (text frame) ────────────► Server
 Client ◄─── <binary payload ~<kb> KB> ──────────────── Server
-  [if adjusted duration < 100ms: double payload and repeat]
-Client ──── "START <kb> 1" (text frame) ────────────► Server
-Client ◄─── <binary payload ~<kb> KB> ──────────────── Server
-  [continue until duration ≥ 100ms or max 5 MB reached]
+  [if adjusted duration < 100ms, or the round stalled: three times the payload, repeat]
+Client ──── "START <kb × 3> 1" (text frame) ────────► Server
+Client ◄─── <binary payload ~<kb × 3> KB> ──────────── Server
+  [until a clean round of ≥ 100ms, 5 MB, or 2 s since the first round]
 ```
 
 The `<kb>` in the `START` command is the requested payload size in **kilobytes** (integer). The server streams a single binary frame of approximately that size.
 
-#### Adaptive Doubling Algorithm
+#### Adaptive Growth Algorithm
+
+The rules are shared with the native libraries (`src/utils/adaptive.ts`):
 
 ```
-messageSizeBytes = 10 KB (initial)
+messageSizeBytes = 10 KB (initial: 10, 30, 90, 270, 810, 2430, 5120 KB)
+rounds = []
 
 loop:
   send "START <messageSizeBytes/1024> 1"
   receive binary frame of byteLength
-  rawDurationMs = now - startTime
-  adjustedMs = rawDurationMs - (latencyMs + jitterMs)
+  durationMs = max(now - startTime - (latencyMs + jitterMs), 1)
+  speedMbps = bytes / (durationMs * 125)
 
-  if adjustedMs < 100ms AND messageSizeBytes < 5 MB:
-    messageSizeBytes *= 2
-    continue
-  else if the thread was blocked for > 50 ms during this round AND repeats < 3:
+  if durationMs >= 100 and the thread was blocked for > 50 ms during this round and repeats < 3:
     repeats += 1
-    continue                                  (same size again)
-  else:
-    durationMs = max(adjustedMs, 1)
-    speedMbps = bytes / (durationMs * 125)
-    resolve { durationMs, bytes, speedMbps }
+    continue                                   (same size again)
+  rounds.push({ bytes, durationMs, speedMbps })
+  baseline = the fastest earlier round that didn't stall
+
+  if 2 s have passed since the first round started:       stop
+  else if durationMs < 100:
+    if messageSizeBytes < 5 MB: messageSizeBytes *= 3 (at most 5 MB); continue
+    else stop
+  else if this is the first round and messageSizeBytes < 5 MB:
+    messageSizeBytes *= 3; continue                                (never trusted alone)
+  else if speedMbps >= baseline.speedMbps / 2
+       or (the round before was 100 ms or more, smaller, and speedMbps < twice its speed):
+                                                           stop   (a clean round)
+  else:                                                            (a stalled round)
+    if messageSizeBytes < 5 MB: messageSizeBytes *= 3 (at most 5 MB)
+    continue
+
+resolve the round it stopped on, when that took 100 ms or more and didn't stall;
+  otherwise the fastest of the last 3 rounds that didn't stall
+  (all 3 stalled: the fastest round that didn't stall) { durationMs, bytes, speedMbps }
 ```
 
-The doubling ensures that the estimation converges to a duration around 100 ms, giving a reliable throughput sample regardless of whether the connection is 1 Mbps or 1 Gbps.
+Tripling reaches 5 MB in 7 rounds, three round trips fewer than doubling, which matters most on long paths. A slow link still stops early: at 100 kbps the first 10 KB round takes about 820 ms, and the second (30 KB, about 2.5 s) confirms it.
 
-A slow round only ends the estimation if the network made it slow. A heartbeat timer runs every 10 ms during each round; if one arrives more than 50 ms late, the thread was blocked (an application rendering between stages, for example), so the message was handled late and the round's timing is not the network's. Such a round is repeated at the same size, up to 3 times, before it is used. Without this, a page that rendered for a few hundred milliseconds right after a stage could make a gigabit link estimate below 1 Mbps and run the next stage on one socket of 1 KB messages. Upload estimation does the same.
+**A slow first round is never trusted alone.** With nothing to compare it with, it can't tell a slow link from one that stalled: on a 300 ms path, an upload estimate read 0.1 Mbps after its first 5 KB took a round trip longer. Only links under about 0.8 Mbps take 100 ms or more for the first round, so only they pay for the second round.
+
+**Stalled rounds.** A round that took 100 ms or more but ran at less than half the fastest earlier round that didn't stall (the baseline) stalled, most likely on a lost packet: its recovery costs a round trip, or a retransmission timeout for a loss near the end of a message. Asking for more data cannot make a link slower, so estimation goes on with a larger round, which spreads the recovery over more data. Stopping on the first slow round, as before, made a 940 Mbps link with 1% loss estimate 1 to 90 Mbps and run its stage on 2 to 4 connections. A stall is a fixed delay, so a round three times larger runs about three times faster through it, while a link that is simply slow runs every size at about the same speed. So a slow round under twice the speed of the slow, smaller round right before it is the link, not a stall: behind a shaper that lets a burst through at once, the first 10 KB read 82 Mbps on a 4 Mbps link, and without this rule every later round counted as a stall. The baseline leaves stalled rounds out, so stalls in a row are each compared with the last clean speed: compared with one another, three 200 ms recoveries in a row on a 900 Mbps link made the third look clean at about 90 Mbps. Estimation settles 2 s after its first round in any case; after a reconnect, 2 s after the first round on the new connection.
+
+**The estimate is the round estimation stopped on** when that was a clean round of 100 ms or more, the one long enough to measure. At the 5 MB cap or the time cap it is the fastest of the last three rounds that didn't stall (when all three stalled, the fastest round that didn't stall), not the last one: a stall can only make a round look slower. Earlier, smaller rounds are left out, because a round of a few KB takes only milliseconds beyond the latency, and a millisecond of jitter can make it read several times too fast.
+
+A slow round only counts if the network made it slow. A heartbeat timer runs every 10 ms during each round; if one arrives more than 50 ms late, the thread was blocked (an application rendering between stages, for example), so the message was handled late and the round's timing is not the network's. Such a round is repeated at the same size, up to 3 times, before it is used. Without this, a page that rendered for a few hundred milliseconds right after a stage could make a gigabit link estimate below 1 Mbps. Upload estimation does the same.
 
 #### Error Recovery
 
@@ -402,9 +428,9 @@ Default: **15,000 ms** (configurable 3,000–30,000 ms). If no response arrives 
 
 **Purpose:** Saturate the available downstream bandwidth by streaming binary data over multiple parallel WebSocket connections simultaneously.
 
-#### Connection Count and Packet Size
+#### Connection Count and Message Size
 
-Both are derived from the estimation result using lookup tables:
+The stage starts with the connection count for its estimate:
 
 **Download connection count:**
 
@@ -417,49 +443,58 @@ Both are derived from the estimation result using lookup tables:
 | 100 – 1000 Mbps | 8 |
 | ≥ 1000 Mbps | 12 |
 
-**Download packet size (per `START` command):**
+The [scale-up](#scale-up) may add connections during the stage.
 
-| Estimated speed | Packet size |
-|---|---|
-| < 0.5 Mbps | 1 KB |
-| 0.5 – 1 Mbps | 16 KB |
-| 1 – 10 Mbps | 32 KB |
-| 10 – 20 Mbps | 64 KB |
-| 20 – 30 Mbps | 128 KB |
-| 30 – 40 Mbps | 256 KB |
-| 40 – 50 Mbps | 512 KB |
-| ≥ 50 Mbps | 1024 KB (1 MB) |
+**Message sizes.** Each message holds about 10 ms of its connection's speed (`MESSAGE_TARGET_MS`), as a power of two from 1 KB to 4 MB, or 5 MB (`DOWNLOAD_MESSAGE_SIZES_KB`). Too small a message costs a fast link per-message work (events, frames, and in JavaScript one callback per message); too large a message, on a slow link, arrives in a lump that makes the gauge pulse, since browsers count whole messages. A connection's first batch is sized for 2.5 ms of its share of the estimate (`getDownloadMessageSizeKb`, `FIRST_MESSAGE_TARGET_MS`): a batch of messages too small ends quickly and the next is sized from what was measured, while one too large would last the whole stage, so the first batch starts small. Every later batch is sized for 10 ms of what the connection received over the last 500 ms, so it grows on a fast link and shrinks on a slow one:
+
+| Speed per connection | Message | Time per message |
+|---|---|---|
+| 100 kbps | 1 KB (the minimum) | 82 ms |
+| 1 Mbps | 1 KB | 8 ms |
+| 10 Mbps | 16 KB | 13 ms |
+| 100 Mbps | 128 KB | 10 ms |
+| 1 Gbps | 1 MB | 8 ms |
+| 3 Gbps | 4 MB | 11 ms |
+
+Servers keep one zero-filled buffer per message size, so a fixed set of sizes (about 13 MB together) keeps that memory bounded.
 
 #### Message Exchange
 
 All sockets are opened in parallel. Once every socket is connected, the test begins simultaneously:
 
 ```
-Client ──── "START <kb> 500" ──────────────────────► Socket 0
-Client ──── "START <kb> 500" ──────────────────────► Socket 1
-Client ──── "START <kb> 500" ──────────────────────► Socket N
+Client ──── "START <kb> 200" ──────────────────────► Socket 0
+Client ──── "START <kb> 200" ──────────────────────► Socket 1
+Client ──── "START <kb> 200" ──────────────────────► Socket N
                                                         │
 Client ◄─── binary frame ◄─── binary frame ◄──── binary frame ─── ...
-  [400 frames received: 100 still due]
-Client ──── "START <kb × 3> 500" ──────────────────► Socket 0   (first batch still sending)
-Client ◄─── <kb> frame ◄─── <kb × 3> frame ◄─── <kb> frame ◄─── <kb × 3> frame ─── ...
+  [what is still due covers less than max(2 round trips, 300 ms)]
+Client ──── "START <10 ms of the socket's speed> 200" ──► Socket 0   (first batch still sending)
+Client ◄─── <kb> frame ◄─── <kb'> frame ◄─── <kb> frame ◄─── <kb'> frame ─── ...
   [continuous streaming for durationMs, all sockets in parallel]
 ```
 
-The `500` iteration count instructs the server to send 500 frames per `START`. Each frame is approximately `<kb>` kilobytes. Each socket keeps a running total of the frames it has requested but not received: every `START` adds 500 and every frame received subtracts 1. Once 100 or fewer are still due, the socket sends the next `START` at once, with three times the size of its previous request (at most 5 MB), so the server always has the next batch before the current one runs out and the link never idles between batches. That request adds 500 to the total, so the next one follows when it is back down to 100.
+The `200` count asks the server for 200 frames per `START`; at 10 ms each, a batch is about 2 s of data. Each frame is approximately `<kb>` kilobytes. Each socket keeps a running total of the frames it has requested but not received: every `START` adds 200 and every frame received subtracts 1. It asks for the next batch while what is still due covers max(2 round trips at the minimum latency, 300 ms) at its message rate over the last 500 ms, so the server always has the next batch before the current one runs out and the link never idles between batches. That is at most one batch, so a socket never has more than two outstanding: the CDN server queues a whole `START` at once, up to 96 MiB, and drops a connection with about 256 MB unsent. Before a socket has 50 ms of history it asks once 100 or fewer are due, at four times the size (a first batch that ended that fast was far too small).
 
 The server starts sending a new batch immediately, alongside the one still in progress, so whole frames of the two batches interleave and differ in size. The client does not rely on batch order or frame size; only the running total matters. Frames beyond everything requested are not counted. The test's wall-clock `durationMs` timer ends the stage regardless of how many frames were received, and no request goes out after it.
 
 ```
 outstanding = 0
-request(kb):  outstanding += 500; lastKb = kb; send "START <kb> 500"
-start:        request(messageSizeKb)
+request(kb):  outstanding += 200; lastKb = kb; send "START <kb> 200"
+start:        request(messageSizeKb)                        (2.5 ms of the connection's share)
 on frame:     if outstanding = 0: ignore
               count its bytes; outstanding -= 1
-              if outstanding <= 100 and the stage is running: request(min(lastKb × 3, 5120))
+              rate = frames and bytes per second over the last 500 ms (null under 50 ms of history)
+              due = rate ? min(ceil(rate.frames × max(2 × latencyMs, 300) / 1000), 200) : 100
+              if outstanding <= due and the stage is running:
+                request(rate ? nearestSize(rate.mbps × 10 ms) : nearestSize(lastKb × 4))
 ```
 
+**When bytes count.** In Node.js, raw TCP sockets and the [Node.js WebSocket client](#nodejs-websocket-client) report a frame's payload bytes as they arrive, once per socket read, and the lane counts them then (each byte once: the frame's message event adds nothing more). A snapshot or the end of the stage therefore also counts the frames still arriving, as in the native libraries. The browser WebSocket API only delivers whole messages, so in browsers (and with `config.nodeWebSocket: false`) a frame counts once it has fully arrived, and up to one frame per socket can be left out of a snapshot or the stage total.
+
 When the stage ends, the download sockets stop requesting more messages but stay open while the loaded latency monitor waits for its last `PONG` (at most 100 ms), so that ping still measures a loaded link; bytes that arrive then are not counted. Each download socket then sends the text command `CLOSE` before closing. The server ends the connection at once instead of first delivering every frame it has already queued, which on a slow link would otherwise occupy the downlink well into the next stage. Servers that do not know the command ignore it.
+
+The CDN server (a Cloudflare Worker) cannot reset a connection: it closes cleanly, and Cloudflare still delivers the frames it already queued, while a browser can only close a WebSocket gracefully. On a 1 Mbps link that left the upload stage at about 60% of the link. So in browsers the upload phase runs in a new stage worker: the worker that ran the download is terminated during the 500 ms cooldown, which drops its sockets at once, like the native clients' hard close. With that, the upload measures the same after a download as on its own (about 100%, against the CDN at 1 Mbps). On the main thread (`browserWorker: false`, or where a worker cannot start) the graceful close remains.
 
 #### Threads
 
@@ -470,11 +505,29 @@ A single JavaScript thread cannot receive or send TLS at 10 Gbps. When the estim
 In Node.js, `ws://` and `wss://` sockets come from the library's own client (`src/tests/node-websocket.ts`) instead of `globalThis.WebSocket`, so no polyfill is needed on any supported Node.js version. Node's built-in `WebSocket` masks every upload byte and copies every download byte in JavaScript, which held a thread to about half its TLS throughput. The client speaks standard WebSocket and differs only in what it does with the payload:
 
 - Download messages above 64 KiB are counted, not read: the frame parser skips their payload, and the message arrives as a zero-filled `ArrayBuffer` of the right length.
+- Download bytes are reported as they arrive (`onpayloadprogress`): for each read, once per message it carries bytes of, and before that message is delivered, so a frame still arriving counts toward snapshots and the stage total. Both this client and raw TCP sockets get it from speed-transport's public payload progress hook (`FrameParserHandler.onPayloadProgress`, `SpeedTransportSocket.onpayloadprogress`, speed-transport 0.3.0 and later).
 - Upload chunks are zeros, so a masked chunk is the masking key repeated. Each chunk size is masked once with a random key and that frame is sent again and again. RFC 6455 asks for a fresh key per frame so that page scripts cannot choose the bytes intermediaries see; the payload here is always zeros chosen by the library. Commands get a fresh key per frame.
 
 Bun and Deno keep their native `WebSocket`. If the client cannot load, the global `WebSocket` is used as before.
 
 Applications that need their own `WebSocket` in Node.js, for example one that goes through an HTTP proxy, adds headers, or uses custom TLS options, set `config.nodeWebSocket: false`. Every socket of the run, the loaded latency socket and worker thread sockets included, then comes from `globalThis.WebSocket` as before this client existed. Worker threads are only used when the workers' `WebSocket` is the same implementation, so a polyfill keeps every socket on the calling thread, and the built-in client's per-byte work applies again. Raw TCP is unaffected.
+
+#### Scale-up
+
+An estimate can still be far too low, and on a path with loss the connection count decides the speed: TCP limits each connection, and only more connections carry more. So the stage checks its own speed at 1, 2, and 3 s after its first counted bytes (`SCALE_UP_CHECKS_MS`):
+
+```
+at each check, while at least 3 s of the stage are left (MIN_SCALE_UP_REMAINING_MS):
+  mbps = the stage's speed over the last 500 ms
+  target = min(connectionCount(mbps / 1.25), 12)            (the same table as the estimate)
+  if target > connections asked for so far:
+    open (target - connections) more at once, spread over the threads with the fewest,
+    each starting at 2.5 ms of mbps / target
+```
+
+Connections are only added, never closed. The 25% margin (`SCALE_UP_MARGIN`) keeps a link near a threshold where it is: right after the ramp-up, data the client hadn't read yet arrives in a burst, and a 940 Mbps link read over 1 Gbps for a moment. A connection that fails to open is dropped without failing the stage. No threads are added mid-stage, so a stage estimated under 1 Gbps stays on one thread even with 12 connections.
+
+The added connections slow-start, so the measurement restarts once they carry data: 250 ms after the last of them counted its first bytes, or 1.25 s after the scale-up if one never does (`SCALE_UP_SETTLE_MS`). A 7 s stage that scales up at 3 s still measures about 3.7 s. The result reports the connections the stage started with and the ones it ended with (see [`testType`](result-schema.md#testtype)).
 
 #### Measurement Model
 
@@ -490,13 +543,26 @@ when the first bytes of the stage are counted:
   1000 ms later (the loaded latency delay), unless the stage has ended:
     the link is loaded (loaded latency pings start, see below)
 
+when a scale-up's connections settled (see Scale-up):
+  250 ms later, unless the stage has ended:
+    fromMs = now - testStartTime
+    fromBytes = totalBytes
+    liveFrom = the live speed last shown
+
 speed(bytes, elapsed) =
   fromMs set and elapsed > fromMs ? (bytes - fromBytes) / ((elapsed - fromMs) * 125)
                                   : stageSpeed(bytes, elapsed)
 
+liveSpeed(bytes, elapsed) =                (progress callbacks only)
+  fromMs not set or elapsed <= fromMs ? stageSpeed(bytes, elapsed)
+  : w = min((elapsed - fromMs) / 1000, 1)  (LIVE_SPEED_BLEND_MS)
+    from = liveFrom set ? liveFrom : stageSpeed(bytes, elapsed)
+    from + (speed(bytes, elapsed) - from) * w
+
 every snapshotIntervalMs (default 100ms):
   elapsed = now - testStartTime
-  emit SpeedSnapshot { timeOffsetMs: elapsed, speedMbps: speed(totalBytes, elapsed), bytes: totalBytes }
+  store SpeedSnapshot { timeOffsetMs: elapsed, speedMbps: speed(totalBytes, elapsed), bytes: totalBytes }
+  emit  the same snapshot with speedMbps: liveSpeed(totalBytes, elapsed)
 
 after durationMs (from testStartTime, not from the first bytes):
   elapsed = now - testStartTime
@@ -505,7 +571,7 @@ after durationMs (from testStartTime, not from the first bytes):
 
 All sockets accumulate into a single `totalBytes` counter. The final speed is computed from the aggregate data across all connections. Speeds are rounded to 3 decimal places.
 
-The ramp-up at the start of a stage, while the connections speed up, is left out of `speedMbps`: it is measured from 250 ms after the first bytes are counted (the first binary frame for download, the first `ACK` for upload) to the stage's end. Everything after that point counts, so a ramp-up longer than the exclusion still lowers the speed, and the wait for the first byte is already excluded, so no latency bias is subtracted. Before that point, or when the stage ends before it, the speed is the whole stage's. Snapshots switch formula at the same point, so the final value continues the last progress values. Both the 250 ms exclusion and the 1 s loaded latency delay are fixed; applications cannot configure them. With worker threads, each worker tells the main thread once when its lane counts its first bytes, and the main thread does all the timing.
+The ramp-up at the start of a stage, while the connections speed up, is left out of `speedMbps`: it is measured from 250 ms after the first bytes are counted (the first download bytes to arrive, or the first whole binary frame where bytes count per frame; the first `ACK` for upload) to the stage's end. Everything after that point counts, so a ramp-up longer than the exclusion still lowers the speed, and the wait for the first byte is already excluded, so no latency bias is subtracted. Before that point, or when the stage ends before it, the speed is the whole stage's. Snapshots switch formula at the same point, so the final value continues the last progress values. The progress callbacks get a live speed instead, so a gauge does not jump at that point: it is the whole stage's speed until the measurement start, then moves in a straight line to the measured speed over the next 1,000 ms (`LIVE_SPEED_BLEND_MS`), and is the measured speed from then on. Right after the start the measured window is only milliseconds long and holds no message or `ACK` at all, or a whole one, so its speed would read about 0 or spike. When a scale-up restarts the measurement, the live speed blends the same way, from the value it showed at that moment. The snapshots stored in the result keep the measured speed. Both the 250 ms exclusion and the 1 s loaded latency delay are fixed; applications cannot configure them. With worker threads, each worker tells the main thread once when its lane counts its first bytes, and the main thread does all the timing.
 
 #### Loaded Latency Monitor
 
@@ -538,11 +604,14 @@ Because these probes run while the download sockets are saturating the link, the
 
 | Parameter | Default | Configurable range |
 |---|---|---|
-| `downloadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
+| `downloadDurationMs` | 7,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
 | Ramp-up exclusion after the first bytes | 250 ms | (fixed) |
 | Loaded latency delay after the first bytes | 1,000 ms | (fixed) |
-| Iterations per START | 500 | (fixed) |
+| Messages per START | 200 | (fixed) |
+| Message size | 10 ms of the connection's speed (2.5 ms for the first batch), 1 KB – 5 MB | (fixed) |
+| Scale-up checks after the first bytes | 1, 2, 3 s | (fixed) |
+| Scale-up margin | 1.25 × the tier threshold | (fixed) |
 | Loaded latency ping interval | 500 ms | (fixed) |
 | Loaded latency grace period | 100 ms | (fixed) |
 
@@ -559,40 +628,29 @@ Client ──── Uint8Array(<bytes>) ─────────────�
   [chunked into ≤ 1 MB pieces if bytes > 1 MB]
 Client ◄─── "ACK" (text frame, one per chunk) ──────── Server
 
-  [if adjustedMs < 100ms: double bytes, repeat]
-Client ──── Uint8Array(<bytes * 2>) ────────────────► Server
+  [if adjustedMs < 100ms, or the round stalled: three times the bytes, repeat]
+Client ──── Uint8Array(<bytes * 3>) ────────────────► Server
 Client ◄─── "ACK" ... "ACK" ───────────────────────── Server
-  [continue until duration ≥ 100ms or max 5 MB reached]
+  [until a clean round of ≥ 100ms, 5 MB, or 2 s since the first round]
 ```
 
 **Chunking rule:** If the target `bytes` exceeds 1 MB, the payload is split into 1 MB chunks. The server sends one `ACK` per chunk. The stage waits for all ACKs before evaluating the duration.
 
-#### Adaptive Doubling Algorithm
+#### Adaptive Growth Algorithm
+
+The same as download estimation (see [Stage 2](#stage-2--download-estimation)), from 5 KB: 5, 15, 45, 135, 405, 1215, 3645, 5120 KB. A round is every chunk of its bytes, sent at once, and ends when every `ACK` has arrived:
 
 ```
 bytes = 5 KB (initial)
 
 loop:
   chunks = split bytes into ≤ 1 MB pieces
-  targetAcks = number of chunks
   startTime = now
-
   for each chunk: socket.send(chunk)
-  wait for targetAcks ACKs
-
-  rawDurationMs = now - startTime
-  adjustedMs = rawDurationMs - (latencyMs + jitterMs)
-
-  if adjustedMs < 100ms AND bytes < 5 MB:
-    bytes *= 2
-    continue
-  else if the thread was blocked for > 50 ms during this round AND repeats < 3:
-    repeats += 1
-    continue                                  (same size again)
-  else:
-    durationMs = max(adjustedMs, 1)
-    speedMbps = bytes / (durationMs * 125)
-    resolve { durationMs, bytes, speedMbps }
+  wait for one ACK per chunk
+  durationMs = max(now - startTime - (latencyMs + jitterMs), 1)
+  then as download estimation: repeat a blocked round, grow while under 100 ms or stalled,
+  stop on a clean round, at 5 MB, or after 2 s; resolve the fastest of the last 3 rounds
 ```
 
 #### Timeout
@@ -605,19 +663,11 @@ Default: **15,000 ms** (configurable 3,000–30,000 ms).
 
 **Purpose:** Saturate available upstream bandwidth by continuously sending binary data bursts across multiple parallel WebSocket connections.
 
-#### Connection Count and Packet Size
+#### Connection Count and Chunk Size
 
 Same lookup tables as download (see [Stage 3](#stage-3--download-throughput)), using the upload estimation result as the input.
 
-**Upload chunk size:**
-
-| Estimated speed | Packet size |
-|---|---|
-| < 0.5 Mbps | 1 KB |
-| 0.5 – 1 Mbps | 16 KB |
-| 1 – 10 Mbps | 128 KB |
-| 10 – 50 Mbps | 512 KB |
-| ≥ 50 Mbps | 1024 KB (1 MB) |
+**Upload chunk size.** Each chunk holds about 10 ms of its connection's acknowledged speed, as a power of two from 1 KB to 1 MB (`UPLOAD_CHUNK_SIZES_KB`). The first chunks hold 2.5 ms of the connection's share of the estimate (`getUploadMessageSizeKb`), for the same reason as download's first batch: chunks too large for the link would sit queued for the whole stage and be credited in lumps. Every 500 ms each connection resizes its chunks from what it had acknowledged over the last 500 ms (`getNextUploadChunkSizeKb`).
 
 #### Message Exchange
 
@@ -630,18 +680,28 @@ Client ◄─── "ACK" (one per chunk, counted for throughput) ◄───�
 
 #### Backpressure Control
 
-Every socket reuses one preallocated chunk of at most 1 MB and keeps its send buffer topped up to two chunks (at least 16 KB). The WebSocket API has no drain event, so sockets are refilled after acknowledgements arrive and on a 5 ms timer:
+The sockets share one preallocated chunk per size, and each keeps its send buffer topped up to two of its chunks (at least 16 KB). The WebSocket API has no drain event, so sockets are refilled after acknowledgements arrive and on a 5 ms timer:
 
 ```
 target = max(2 × chunkBytes, 16 KB)
 
 refill(socket):
+  mbps = acknowledged Mbps over the last 500 ms (null under 50 ms of history)
+  every 500 ms: chunkBytes = getNextUploadChunkSizeKb(chunkBytes, mbps)
+  limit = max(64 × chunkBytes, mbps ? min(mbps × 125 × 8 × max(latencyMs, 50), 64 MiB) : 0)
   while socket.bufferedAmount < target
-    and unacknowledged chunks < 64:
-    socket.send(chunk)
+    and unacknowledged bytes + chunkBytes <= limit:
+    socket.send(chunk of chunkBytes); remember its size
+
+on ACK:
+  credit the oldest unacknowledged chunk's size
 ```
 
-A refill stops after 4 ms of work, and acknowledgements that arrive together share one refill, so a client that is short of CPU still emits snapshots and loaded latency probes on time. The cap of 64 unacknowledged chunks bounds memory with WebSocket implementations that do not report `bufferedAmount`, while still covering the bandwidth-delay product of 1.7 Gbps per socket at a 300 ms round trip.
+Chunk sizes differ over a stage, so each `ACK` credits the oldest chunk still unacknowledged (the server answers in order, one `ACK` per message).
+
+**Data in flight** (`getUploadInFlightLimitBytes`) is limited in bytes: 64 of the connection's current chunks, or 8 round trips (at the minimum latency, at least 50 ms) of the speed it acknowledged over the last 500 ms, whichever is more, at most 64 MiB (as before: 1.7 Gbps per connection at a 300 ms round trip). The chunks stay small, so the gauge moves smoothly on a slow link, while the data in flight follows the link: a connection held back by the limit acknowledges about 8 round trips' worth per round trip, so the limit grows about 8 times per round trip until the link is what limits it. With 64 chunks alone, a connection that started on 1 KiB chunks had 64 KiB in flight, 1.7 Mbps at a 300 ms round trip; measured at 300 ms, upload had fallen from 417 to 210 Mbps. On a slow link whose buffers take whatever is sent, the limit stays near 8 round trips, so the backlog left when the stage ends stays small. Counting bytes also means a connection that shrank its chunks adds no more behind the larger ones still in flight.
+
+A refill stops after 4 ms of work, and acknowledgements that arrive together share one refill, so a client that is short of CPU still emits snapshots and loaded latency probes on time. The in-flight limit, at most 64 MiB, also bounds memory with WebSocket implementations that do not report `bufferedAmount`.
 
 **Throughput is computed from acknowledged bytes**: a chunk counts once the server's `ACK` for it arrives, so data still queued on the client is never counted.
 
@@ -657,12 +717,13 @@ Identical to download: `snapshotIntervalMs` periodic snapshots, a wall-clock `du
 
 | Parameter | Default | Configurable range |
 |---|---|---|
-| `uploadDurationMs` | 10,000 ms | 3,000 – 30,000 ms |
+| `uploadDurationMs` | 7,000 ms | 3,000 – 30,000 ms |
 | `snapshotIntervalMs` | 100 ms | 50 – 5,000 ms |
 | Refill timer | 5 ms | (fixed) |
 | Ramp-up exclusion after the first `ACK` | 250 ms | (fixed) |
 | Loaded latency delay after the first `ACK` | 1,000 ms | (fixed) |
-| Max chunk size | 1 MB | (fixed) |
+| Chunk size | 10 ms of the connection's speed (2.5 ms at first), 1 KB – 1 MB | (fixed) |
+| Scale-up checks after the first `ACK` | 1, 2, 3 s | (fixed) |
 | Loaded latency ping interval | 500 ms | (fixed) |
 | Loaded latency grace period | 100 ms | (fixed) |
 
@@ -712,16 +773,19 @@ On loopback interfaces or very fast local networks, the adjusted duration can be
 
 ## Adaptive Sizing
 
-The estimation stages converge to a target adjusted duration of **100 ms** by doubling the payload on each attempt. The table below shows how many doubling iterations are needed for different connection speeds:
+The estimation stages grow their rounds threefold until one takes **100 ms** beyond the latency (and didn't stall), reaches 5 MB, or 2 s have passed:
 
-| Connection speed | Starting payload (10 KB) adjusted duration | Doublings to reach 100 ms |
+| Connection speed | First round (10 KB) beyond the latency | Rounds |
 |---|---|---|
-| 1 Mbps | ~80 ms | 0–1 |
-| 10 Mbps | ~8 ms | 3–4 |
-| 100 Mbps | ~0.8 ms | 6–7 |
-| 1 Gbps | ~0.08 ms | 9–10 → capped at 5 MB |
+| 100 kbps | ~820 ms | 2 (10, 30 KB) |
+| 1 Mbps | ~80 ms | 2 (10, 30 KB) |
+| 10 Mbps | ~8 ms | 4 (up to 270 KB) |
+| 100 Mbps | ~0.8 ms | 6 (up to 2430 KB) |
+| 1 Gbps | ~0.08 ms | 7 → capped at 5 MB |
 
-At 5 MB cap, the estimation result reflects the actual transfer time for 5 MB, which still provides a reliable throughput estimate even if the target duration wasn't reached.
+At the 5 MB cap the estimate reflects the transfer time of the largest rounds, which still provides a reliable throughput estimate even if the target duration wasn't reached.
+
+The throughput stages then size every message from the speed each connection measures, about 10 ms of it (see [Stage 3](#connection-count-and-message-size) and [Stage 5](#connection-count-and-chunk-size)), and the [scale-up](#scale-up) adds connections when the estimate was far too low.
 
 ---
 
@@ -757,9 +821,8 @@ When cancelled:
 
 When a stage throws an error (non-cancellation):
 
-1. `engine.callbacks.onError(error, stage)` fires.
-2. `failedReason` is set to `error.message`.
-3. `failedStage` is mapped from the engine stage name to the result stage marker:
+1. `failedReason` is set to `"<reason>: <message>"`, where `<reason>` is the error's failure reason (below) and `<message>` its message.
+2. `failedStage` is the start marker of the phase that failed:
 
 | Engine stage | `failedStage` recorded |
 |---|---|
@@ -767,7 +830,24 @@ When a stage throws an error (non-cancellation):
 | `downloadEstimation` or `download` | `"downloadStart"` |
 | `uploadEstimation` or `upload` | `"uploadStart"` |
 
-4. The engine continues to the result assembly step and uploads a partial result.
+   With the latency stage disabled, a failed latency normalization ping fails the phase it runs in (`downloadStart` or `uploadStart`).
+3. The failed phase's end marker (`latencyEnd`, `downloadEnd`, or `uploadEnd`) is recorded.
+4. `engine.callbacks.onError(error, stage)` fires.
+5. The engine continues to the result assembly step and uploads the partial result.
+
+Failure reasons are the native engine's `FailureReason` values, so failures from every CoverageMap client group the same way. Errors are tagged where they are created (`SpeedTestError.reason`), including across the browser Web Worker and Node.js worker threads:
+
+| Reason | When |
+|---|---|
+| `unreachable` | No transport the server offers can be used from this runtime |
+| `connectionFailed` | A connection was refused, could not be created, or dropped |
+| `connectionTimeout` | A connection did not open in time (the first connection's 3 s window, or a stage timeout before it connected) |
+| `transferTimeout` | A throughput stage did not move data: none within 10 s, or none by the end of a shorter stage (as in the native engines) |
+| `timeout` | A stage did not finish in time after it connected |
+| `protocolError` | The server answered with something the protocol does not allow |
+| `unknown` | Any other error |
+
+For example: `"connectionTimeout: Connection not open after 3000ms"`, `"connectionFailed: Download WebSocket connection 3 failed"`. A cancelled run is the exception: `failedReason` is `"Cancelled"` and `failedStage` is the engine stage it was cancelled in (`latency`, `downloadEstimation`, `download`, `uploadEstimation`, or `upload`), as in the native engines. Cancelled runs are never uploaded, so only the `run()` result and `onComplete` carry these values.
 
 Partial results (where a stage failed) still include all data that was collected up to the point of failure. For example, if download succeeds but upload fails, the result contains valid `downloadSpeed` and `latency` but `uploadSpeed: null`.
 
@@ -777,7 +857,7 @@ The `testStatus` field is `"passed"` when `failedStage` is null, and `"failed"` 
 
 ## Phase 3: Result Upload
 
-On successful test completion, the engine uploads the assembled result to:
+When a run ends, passed or failed, the engine uploads the assembled result to:
 
 ```
 POST https://map.coveragemap.com/api/v1/speedTests
@@ -788,7 +868,7 @@ Content-Type: application/json
 
 The body is a JSON array (batch format), containing a single result per standard test run.
 
-This upload is fire-and-forget from the engine's perspective — it does not block the resolved `run()` promise.
+A failed run is uploaded too, with `failedStage` and `failedReason`. A cancelled run is not uploaded. This upload is fire-and-forget from the engine's perspective — it does not block the resolved `run()` promise.
 
 ### Upload Queue Fallback
 
@@ -798,11 +878,11 @@ If the upload POST fails (network error, server unavailable, etc.), the result i
 coveragemap-test-results-queue → JSON array of NetworkTestResultTestResults
 ```
 
-On the **next call** to `engine.run()`, the engine attempts to flush the queue before the new test begins:
+On the **next call** to `engine.run()`, the engine retries the queue in the background, alongside the new test; it does not wait for the retry:
 
 ```
 engine.run() called
-  → flushUploadQueue()  // retry any previously failed uploads
+  → flushUploadQueue()  // started, not awaited: retries previously failed uploads
   → ... run test stages ...
   → uploadResults(newResult)
 ```
@@ -821,9 +901,9 @@ await engine.retryQueuedUploads();
 
 | Config field | Default | Min | Max | Description |
 |---|---|---|---|---|
-| `pingCount` | 10 | 5 | 50 | Number of PING/PONG probes per latency stage |
-| `downloadDurationMs` | 10,000 | 3,000 | 30,000 | Download throughput stage wall time (ms) |
-| `uploadDurationMs` | 10,000 | 3,000 | 30,000 | Upload throughput stage wall time (ms) |
+| `pingCount` | 15 | 5 | 50 | Number of PING/PONG probes per latency stage |
+| `downloadDurationMs` | 7,000 | 3,000 | 30,000 | Download throughput stage wall time (ms) |
+| `uploadDurationMs` | 7,000 | 3,000 | 30,000 | Upload throughput stage wall time (ms) |
 | `snapshotIntervalMs` | 100 | 50 | 5,000 | Progress snapshot interval (ms) |
 | `latencyTimeoutMs` | 10,000 | 3,000 | 30,000 | Timeout for latency stage (ms) |
 | `estimationTimeoutMs` | 15,000 | 3,000 | 30,000 | Timeout for estimation stages (ms) |

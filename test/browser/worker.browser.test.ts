@@ -147,8 +147,10 @@ describe.skipIf(browsers.length === 0).each(browsers)('browser stage worker in %
     const report = await run({});
     expect(report.status).toBe('passed');
     expect(report.protocol).toBe('WS');
-    expect(report.workersCreated).toBe(1);
-    expect(report.workersTerminated).toBe(1);
+    // One worker for the latency and download phases, terminated before the upload phase so
+    // its download sockets are dropped at once, and a new one for the upload phase.
+    expect(report.workersCreated).toBe(2);
+    expect(report.workersTerminated).toBe(2);
     expect(report.stages).toEqual(['latency', 'downloadEstimation', 'download', 'uploadEstimation', 'upload', 'complete']);
     expect(report.pings).toBe(5);
     expect(report.latencies).toBe(5);
@@ -161,13 +163,14 @@ describe.skipIf(browsers.length === 0).each(browsers)('browser stage worker in %
   it('measures at full speed in a worker while the page keeps its main thread busy', async () => {
     const report = await run({ busy: '1' });
     expect(report.status).toBe('passed');
-    expect(report.workersCreated).toBe(1);
+    expect(report.workersCreated).toBe(2);
     // The page really was busy for the whole run.
     expect(report.busyBlocks).toBeGreaterThan(50);
-    // Loopback is far above 50 Mbps: the estimates pick the largest messages and the most
-    // sockets. A collapsed estimate would pick 1 KB messages on one socket.
-    expect(report.downloadPacketKb).toBe(1024);
-    expect(report.uploadPacketKb).toBe(1024);
+    // Loopback is far above 50 Mbps: the estimates pick the most sockets, and first messages of
+    // 2.5 ms of each one's share are tens of KB. A collapsed estimate would pick 1 KB messages on
+    // one socket.
+    expect(report.downloadPacketKb).toBeGreaterThanOrEqual(16);
+    expect(report.uploadPacketKb).toBeGreaterThanOrEqual(16);
     expect(report.downloadConnections).toBeGreaterThanOrEqual(8);
     expect(report.uploadConnections).toBeGreaterThanOrEqual(8);
     expect(report.downloadMbps).toBeGreaterThan(50);

@@ -145,7 +145,7 @@ describe('openWorkerLanes', () => {
 
       for (const lane of lanes!) lane.start();
       await vi.advanceTimersByTimeAsync(5);
-      expect(LaneSocketMock.instances.map((socket) => socket.sent)).toEqual(Array(4).fill(['START 2 500']));
+      expect(LaneSocketMock.instances.map((socket) => socket.sent)).toEqual(Array(4).fill(['START 2 200']));
       // Each lane's two sockets received one 2 KiB frame, read through the shared counters.
       expect(lanes!.map((lane) => lane.bytes)).toEqual([4096, 4096]);
 
@@ -171,19 +171,20 @@ describe('openWorkerLanes', () => {
     // The second worker reports a connection failure while the first is still starting.
     FakeWorker.script = (worker) => {
       if (worker.data.slot !== 1) return false;
-      worker.post({ type: 'error', message: 'Download WebSocket connection 2 failed' });
+      worker.post({ type: 'error', message: 'Download WebSocket connection 2 failed', reason: 'connectionFailed' });
       return true;
     };
-    await expect(
-      openWorkerLanes('download', { serverUrl: SERVER_URL, connectionCount: 4, messageSizeKb: 2, threads: 2 }, callbacks())
-    ).rejects.toThrow('Download WebSocket connection 2 failed');
+    const opening = openWorkerLanes('download', { serverUrl: SERVER_URL, connectionCount: 4, messageSizeKb: 2, threads: 2 }, callbacks());
+    await expect(opening).rejects.toThrow('Download WebSocket connection 2 failed');
+    // The failure reason survives the thread boundary.
+    await expect(opening).rejects.toMatchObject({ reason: 'connectionFailed' });
     expect(FakeWorker.instances.every((worker) => worker.terminated)).toBe(true);
   });
 
   it('fails the stage rather than retrying on the calling thread', async () => {
     FakeWorker.script = (worker) => {
       if (worker.data.slot !== 1) return false;
-      worker.post({ type: 'error', message: 'Download WebSocket connection 6 failed' });
+      worker.post({ type: 'error', message: 'Download WebSocket connection 6 failed', reason: 'connectionFailed' });
       return true;
     };
     await expect(
@@ -243,9 +244,47 @@ describe('openWorkerLanes', () => {
     const events = callbacks();
     const lanes = await openWorkerLanes('download', { serverUrl: SERVER_URL, connectionCount: 4, messageSizeKb: 2, threads: 2 }, events);
     expect(lanes).toHaveLength(2);
-    FakeWorker.instances[0].post({ type: 'error', message: 'late failure' });
+    FakeWorker.instances[0].post({ type: 'error', message: 'late failure', reason: 'connectionTimeout' });
     await expect.poll(() => events.errors.map((error) => error.message)).toEqual(['late failure']);
+    expect(events.errors[0]).toMatchObject({ reason: 'connectionTimeout' });
     for (const lane of lanes!) lane.close();
+  });
+
+  it('sends the failure reason of a socket that failed inside the worker', async () => {
+    // Refused before it opens.
+    class FailingSocket {
+      readyState = 0;
+      binaryType = 'arraybuffer';
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      constructor() {
+        setTimeout(() => {
+          this.readyState = 3;
+          this.onerror?.(new Event('error'));
+        }, 0);
+      }
+      send(): void {}
+      close(): void {}
+    }
+    vi.stubGlobal('WebSocket', FailingSocket as unknown as typeof WebSocket);
+    const messages: WorkerToHostMessage[] = [];
+    const port: LanePort = { postMessage: (message) => messages.push(message), on: () => {} };
+    await hostWorkerLane(port, {
+      direction: 'download',
+      serverUrl: SERVER_URL,
+      connectionCount: 1,
+      messageSizeKb: 2,
+      counters: new SharedArrayBuffer(8),
+      slot: 0,
+      webSocketSource: Function.prototype.toString.call(FailingSocket),
+    });
+    await expect.poll(() => messages.find((message) => message.type === 'error')).toEqual({
+      type: 'error',
+      message: 'Download WebSocket connection 0 failed',
+      reason: 'connectionFailed',
+    });
   });
 
   it('falls back when a worker cannot use the same WebSocket', async () => {
