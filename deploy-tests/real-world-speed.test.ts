@@ -274,12 +274,16 @@ describe.sequential('post-deploy real-world validation', () => {
       expect(result.results.testStatus).toBe('passed');
       expect(result.results.measurements.downloadSpeed).toBeNull();
       expect((result.results.measurements.uploadSpeed ?? 0)).toBeGreaterThan(0);
-      expect((result.results.measurements.latency ?? 0)).toBeGreaterThan(0);
+      // With the latency stage off, the one ping that still runs only normalizes the upload's
+      // timing and is not reported (docs/result-schema.md): no latency, jitter, or latency markers
+      expect(result.results.measurements.latency).toBeNull();
+      expect(result.results.measurements.jitter).toBeNull();
+      expect(result.results.measurements.latenciesList).toBeNull();
+      expect(result.stages?.map((stage) => stage.testStage)).toEqual(['uploadStart', 'uploadEnd']);
 
       testSummary.push({
         scenario,
         uploadMbps: result.results.measurements.uploadSpeed,
-        latencyMs: result.results.measurements.latency,
         status: result.results.testStatus,
       });
     },
