@@ -4,7 +4,7 @@
     "owner": "CoverageMapLLC",
     "name": "coveragemap-speed-test"
   },
-  "updatedAt": "2026-11-15T19:50:26.223Z",
+  "updatedAt": "2026-11-19T02:51:22.396Z",
   "config": {
     "name": "Speed Testing NPM Library (Open)",
     "description": "A JavaScript Speed Test library leveraging the CoverageMap Speed Test system and infrastructure",
