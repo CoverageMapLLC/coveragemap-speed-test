@@ -6,17 +6,40 @@ Results now follow the standard result format shared by every CoverageMap client
 
 ### Improvements
 
+- **Throughput stages adapt to the link**: Measured from a Mac on a 940 Mbps link against a Node.js server, with the server's traffic shaped, old library against new (results not uploaded):
+
+  | Condition | Download, old → new | Upload, old → new |
+  |---|---|---|
+  | Clean, 17 ms | 938–942 → 937–941 Mbps | 932–947 → 925–932 Mbps |
+  | 1% loss, +40 ms | 796–940 → 922–933 Mbps | 17–30 → 21–31 Mbps |
+  | 300 ms round trip | 273–319 → 555–600 Mbps | 174–417 → 510–529 Mbps (raw TCP) |
+  | 10 Mbps | 9.6 → 9.5–9.6 Mbps | 6.8–7.3 → 9.4–9.6 Mbps |
+  | 1 Mbps | 0.9–1 → 0.9–1 Mbps | 0.4–0.6 → 0.8–0.9 Mbps |
+  | 20 Mbps / 5 Mbps policer with a burst | 18.2–19.1 → 19.0–19.1 Mbps | 0, 4.7, or failed → 4.6 Mbps |
+
+  On loopback (12 connections, CPU-bound on two cores) download and raw TCP upload stayed within run-to-run variation (about 24 and 15.6 Gbps); secure WebSocket upload measured 6.5 to 6.9 Gbps against 6.8 to 7.3.
+  - **Estimation** grows its rounds threefold (10, 30, 90 … 5120 KB), goes on past a round that stalled on a lost packet instead of settling on it, never settles on a slow first round alone, settles 2 s after its first round at the latest, and estimates the fastest of its last three rounds. Stopping on the first slow round had made a 940 Mbps link with 1% loss estimate 1 to 90 Mbps.
+  - **Scale-up**: at 1, 2, and 3 s into a download or upload stage, a stage whose speed over the last 500 ms calls for more connections (the estimate's table, with a 25% margin) opens them, up to 12, and measures again once they carry data. A bad estimate no longer leaves a fast link on 2 to 4 connections.
+  - **Message sizes follow each connection's speed**: about 10 ms of it, as a power of two (1 KB to 5 MB down, 1 KB to 1 MB up). Too large a message on a slow link arrived in one lump: the upload gauge jumped with every acknowledged chunk, and on a 1 Mbps link 67% to 88% of the 100 ms snapshots counted nothing (now 20% to 41%, where the test's own shaping clumps packets). A connection's first messages are sized for 2.5 ms of its share of the estimate, so an estimate that read high corrects itself at once. Download batches are 200 messages, asked for two round trips (at least 300 ms) ahead.
+  - **Upload data in flight follows the link**: 64 chunks, or 8 round trips of what the connection acknowledged, whichever is more, at most 64 MiB, and each `ACK` credits the oldest chunk. With 128 KB chunks on a 10 Mbps link, and the chunks still queued when the stage ended, upload had measured 25% low.
 - **Steady live speed at the measurement start**: `onDownloadProgress` and `onUploadProgress` no longer switch at once from the whole-stage speed to the measured speed 250 ms after the first bytes. The live speed now moves from one to the other over the next second. Right after the switch the measured window was only milliseconds long and held no message or `ACK`, or a whole one, so a gauge jumped there and then read about 0 or spiked for a moment. The snapshots in `SpeedTestData.snapshots` and the result, and every final speed, are unchanged. During that second a progress snapshot's `speedMbps` can differ from the stored snapshot at the same time. This matches the CoverageMap Android and iOS speed test libraries.
-- **Download bytes count as they arrive in Node.js**: Raw TCP sockets and the library's Node.js WebSocket client report each frame's bytes as they are read, so progress snapshots and the stage total also count the frames still arriving (1 to 5 MiB per socket), as the native libraries do, and the ramp-up exclusion starts from the first bytes to arrive. Before, only whole frames counted. The work is per socket read, not per byte: on loopback with 12 sockets on 6 threads, throughput and CPU per byte stayed within run-to-run variation (raw TCP about 22 Gbps, WebSocket about 33 to 35 Gbps). Browsers, and `config.nodeWebSocket: false`, still count whole frames: the WebSocket API only delivers whole messages. The bytes come from speed-transport's public payload progress hook, so this needs `@coveragemap/speed-transport` 0.3.0 (now the minimum version).
+- **Download bytes count as they arrive in Node.js**: Raw TCP sockets and the library's Node.js WebSocket client report each frame's bytes as they are read, so progress snapshots and the stage total also count the frames still arriving (1 to 5 MiB per socket), as the native libraries do, and the ramp-up exclusion starts from the first bytes to arrive. Before, only whole frames counted. The work is per socket read, not per byte: on loopback with 12 sockets on 6 threads, throughput and CPU per byte stayed within run-to-run variation (raw TCP about 22 Gbps, WebSocket about 33 to 35 Gbps). Browsers, and `config.nodeWebSocket: false`, still count whole frames: the WebSocket API only delivers whole messages. The bytes come from speed-transport's public payload progress hook (`@coveragemap/speed-transport` 0.3.0 and later).
 
 ### New Features
 
+- **`initialDownloadConnectionCount` and `initialUploadConnectionCount`** in `testType`: the connections each throughput stage started with, from its estimate. `downloadConnectionCount` / `uploadConnectionCount` and the established counts include the connections the scale-up added, and the requested counts the ones it asked for. `SpeedTestData` has `initialConnectionCount`, `requestedConnectionCount`, and `connectionCount`.
+- **The adaptive rules are exported**: `DOWNLOAD_MESSAGE_SIZES_KB`, `UPLOAD_CHUNK_SIZES_KB`, `MESSAGE_TARGET_MS`, `DOWNLOAD_BATCH_MESSAGES`, `ESTIMATION_TIME_CAP_MS`, `getDownloadMessageSizeForSpeedKb`, `getUploadChunkSizeForSpeedKb`, `getFirstDownloadMessageSizeKb`, `nextEstimationStep`, and `estimationReference`.
+
 - **`estimatedDownloadSpeed` and `estimatedUploadSpeed`** in `results.measurements`: the Mbps measured by each estimation stage, rounded to 3 decimals, `null` when estimation did not complete.
-- **`requestedDownloadConnectionCount`, `establishedDownloadConnectionCount`, `requestedUploadConnectionCount`, `establishedUploadConnectionCount`** in `testType`: the connections each throughput stage asked for and the ones that opened. A stage only starts once every connection is open, so the two are equal for a stage that completed; established is `null` for one that did not.
+- **`requestedDownloadConnectionCount`, `establishedDownloadConnectionCount`, `requestedUploadConnectionCount`, `establishedUploadConnectionCount`** in `testType`: the connections each throughput stage asked for (its tier, and the ones its scale-up added) and the ones that opened. A stage only starts once every one of its first connections is open; an added connection that never opens is dropped, so established can be lower than requested. Established is `null` for a stage that did not complete.
 - **`latencyEnd` stage marker** after the latency stage, and the failing phase now records its end marker too (`latencyEnd`, `downloadEnd`, or `uploadEnd`), not only `failedStage`. A cancelled run records none.
 - **`SpeedTestError`, `getFailureReason`, `formatFailedReason`, and the `SpeedTestFailureReason` type** are exported. Errors the stages raise, and pass to `onError`, carry a `reason`.
 
 ### Breaking Changes
+
+- **`getDownloadMessageSizeKb` and `getUploadMessageSizeKb`** return the first message size for an estimate spread over the stage's connections (2.5 ms of each connection's share), and take the connection count as an optional second argument. They returned a size from a fixed speed table.
+- **`downloadPacketSize` / `uploadPacketSize`** are the first message and chunk sizes; each connection then sizes its messages from its speed.
+- **Download batches are `START <kb> 200`** (were 500). Servers accept any count up to 1000, so nothing changes for them.
 
 - **Defaults: 15 pings and 7 s stages**: `pingCount` is 15 (was 10) and `downloadDurationMs` / `uploadDurationMs` are 7000 (were 10000), the same as the CoverageMap app and native libraries. Pass the old values in `config` to keep them.
 - **`failedReason` is `"<reason>: <message>"`** (or `"Cancelled"`), where `<reason>` is one of `unreachable`, `connectionFailed`, `connectionTimeout`, `transferTimeout`, `timeout`, `protocolError`, `unknown`, the native engine's failure reasons. It was the bare error message.
@@ -24,6 +47,8 @@ Results now follow the standard result format shared by every CoverageMap client
 - **With the latency stage disabled, `latency`, `jitter`, and `latenciesList` are `null`**, and `onComplete` receives `null` latency data. The single ping that still runs to normalize the later stages' timing now runs inside the first download or upload phase, after its start marker, and is no longer reported as the result's latency.
 
 ### Bug Fixes
+
+- **`@coveragemap/speed-transport` 0.3.1 is the minimum version**. 0.3.1 bounds the zero-filled buffers its server keeps per message size at 32 MiB; before, a client asking for every size could make a server worker hold about 50 GiB. The library's own client code is unchanged by it.
 
 - **A throughput stage that moves no data fails**: A download or upload stage that counted no bytes passed with 0 Mbps. It now fails with `transferTimeout` (`"transferTimeout: No download data in 7000 ms"`), like the native engines: after 10 s with no data, or at the end of a shorter stage. The loaded latency socket of a stage that fails is now closed too.
 

@@ -97,17 +97,34 @@ export interface NetworkTestResultTestType {
   downloadTestDuration: number | null;
   uploadTestDuration: number | null;
   testProtocol: string;
-  /** Connections that carried the download stage (the established count). Null when the stage did not complete. */
+  /**
+   * Connections that carried the download stage at its end (the established count), including
+   * ones its scale-up added. Null when the stage did not complete.
+   */
   downloadConnectionCount: number | null;
-  /** Connections that carried the upload stage (the established count). Null when the stage did not complete. */
+  /**
+   * Connections that carried the upload stage at its end (the established count), including
+   * ones its scale-up added. Null when the stage did not complete.
+   */
   uploadConnectionCount: number | null;
-  /** Connections the download stage asked for (its tier). Null when download estimation did not complete. */
+  /**
+   * Connections the download stage started with, picked from its estimate (its tier). Lower than
+   * `downloadConnectionCount` when the scale-up added some. Null when download estimation did not
+   * complete.
+   */
+  initialDownloadConnectionCount?: number | null;
+  /** Like `initialDownloadConnectionCount`, for the upload stage. */
+  initialUploadConnectionCount?: number | null;
+  /**
+   * Connections the download stage asked for: its tier, and the ones its scale-up added. The tier
+   * alone when the stage did not complete. Null when download estimation did not complete.
+   */
   requestedDownloadConnectionCount: number | null;
-  /** Download connections that opened. Null when the download stage did not complete. */
+  /** Download connections that opened, added ones included. Null when the download stage did not complete. */
   establishedDownloadConnectionCount: number | null;
-  /** Connections the upload stage asked for (its tier). Null when upload estimation did not complete. */
+  /** Like `requestedDownloadConnectionCount`, for the upload stage. */
   requestedUploadConnectionCount: number | null;
-  /** Upload connections that opened. Null when the upload stage did not complete. */
+  /** Upload connections that opened, added ones included. Null when the upload stage did not complete. */
   establishedUploadConnectionCount: number | null;
   downloadPacketSize: number | null;
   uploadPacketSize: number | null;

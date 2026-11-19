@@ -311,8 +311,9 @@ describe('throughput ramp-up exclusion', () => {
   });
 
   it('measures the upload from 250 ms after the first ACK', async () => {
-    // Four 8 KiB chunks acknowledged every 20 ms from 105 ms into the stage.
-    const feed: Feed = { firstMs: 105, everyMs: 20, units: () => 4 };
+    // Two 8 KiB chunks acknowledged every 20 ms from 105 ms into the stage: 6.6 Mbps, whose
+    // 10 ms is the 8 KiB chunk, so the lane keeps that size and every ACK credits 8 KiB.
+    const feed: Feed = { firstMs: 105, everyMs: 20, units: () => 2 };
     RampSocketMock.feed = feed;
     const { result, snapshots, live } = await run('upload', { durationMs: 1500 });
 

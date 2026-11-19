@@ -157,12 +157,13 @@ describe('upload estimation when the thread stalls', () => {
     expect(result.bytes).toBeGreaterThan(5 * 1024);
   });
 
-  it('still settles on the first slow round when the network is what is slow', async () => {
+  it('settles on the second slow round when the network is what is slow', async () => {
+    // A slow first round alone could be a stall, so estimation takes one more round to compare
     const rounds = socketWith(() => 150);
 
     const result = await run();
-    expect(result.bytes).toBe(5 * 1024);
-    expect(rounds.count).toBe(1);
+    expect(result.bytes).toBe(15 * 1024);
+    expect(rounds.count).toBe(2);
     expect(result.speedMbps).toBeLessThan(1);
   });
 
@@ -172,7 +173,8 @@ describe('upload estimation when the thread stalls', () => {
     });
 
     const result = await run();
-    expect(result.bytes).toBe(5 * 1024);
-    expect(rounds.count).toBe(1 + MAX_STALLED_ROUND_REPEATS);
+    // The first round once its repeats ran out, then one more to compare it with
+    expect(result.bytes).toBe(15 * 1024);
+    expect(rounds.count).toBe(2 + MAX_STALLED_ROUND_REPEATS);
   });
 });

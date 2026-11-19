@@ -206,6 +206,8 @@ export class SpeedTestEngine {
     let uploadEstimation: SpeedEstimationResult | null = null;
     let downloadResult: SpeedTestData | null = null;
     let uploadResult: SpeedTestData | null = null;
+    let initialDownloadConnectionCount: number | null = null;
+    let initialUploadConnectionCount: number | null = null;
     let requestedDownloadConnectionCount: number | null = null;
     let establishedDownloadConnectionCount: number | null = null;
     let downloadMessageSizeKb: number | null = null;
@@ -358,8 +360,12 @@ export class SpeedTestEngine {
             cancellationToken: this.cancellationToken,
           });
           this.setStage('download');
-          downloadMessageSizeKb = getDownloadMessageSizeKb(downloadEstimation.speedMbps);
           requestedDownloadConnectionCount = getDownloadConnectionCount(downloadEstimation.speedMbps);
+          initialDownloadConnectionCount = requestedDownloadConnectionCount;
+          downloadMessageSizeKb = getDownloadMessageSizeKb(
+            downloadEstimation.speedMbps,
+            requestedDownloadConnectionCount
+          );
           downloadResult = await stageRunner.runDownloadSpeedTest({
             serverUrl,
             nodeWebSocket,
@@ -376,8 +382,10 @@ export class SpeedTestEngine {
             cancellationToken: this.cancellationToken,
             onSnapshot: (snapshot) => this.callbacks.onDownloadProgress?.(snapshot),
           });
-          // A throughput stage only starts once every one of its connections is open.
-          establishedDownloadConnectionCount = requestedDownloadConnectionCount;
+          // A throughput stage only starts once every one of its first connections is open;
+          // the scale-up may have added more.
+          requestedDownloadConnectionCount = downloadResult.requestedConnectionCount;
+          establishedDownloadConnectionCount = downloadResult.connectionCount;
           this.callbacks.onDownloadResult?.(downloadResult);
           await endPhase();
         }
@@ -420,8 +428,9 @@ export class SpeedTestEngine {
             cancellationToken: this.cancellationToken,
           });
           this.setStage('upload');
-          uploadMessageSizeKb = getUploadMessageSizeKb(uploadEstimation.speedMbps);
           requestedUploadConnectionCount = getUploadConnectionCount(uploadEstimation.speedMbps);
+          initialUploadConnectionCount = requestedUploadConnectionCount;
+          uploadMessageSizeKb = getUploadMessageSizeKb(uploadEstimation.speedMbps, requestedUploadConnectionCount);
           uploadResult = await stageRunner.runUploadSpeedTest({
             serverUrl,
             nodeWebSocket,
@@ -438,7 +447,8 @@ export class SpeedTestEngine {
             cancellationToken: this.cancellationToken,
             onSnapshot: (snapshot) => this.callbacks.onUploadProgress?.(snapshot),
           });
-          establishedUploadConnectionCount = requestedUploadConnectionCount;
+          requestedUploadConnectionCount = uploadResult.requestedConnectionCount;
+          establishedUploadConnectionCount = uploadResult.connectionCount;
           this.callbacks.onUploadResult?.(uploadResult);
           await endPhase();
         }
@@ -478,6 +488,8 @@ export class SpeedTestEngine {
         downloadResult,
         uploadEstimation,
         uploadResult,
+        initialDownloadConnectionCount,
+        initialUploadConnectionCount,
         requestedDownloadConnectionCount,
         establishedDownloadConnectionCount,
         downloadMessageSizeKb,
@@ -592,6 +604,8 @@ export class SpeedTestEngine {
     downloadResult: SpeedTestData | null;
     uploadEstimation: SpeedEstimationResult | null;
     uploadResult: SpeedTestData | null;
+    initialDownloadConnectionCount: number | null;
+    initialUploadConnectionCount: number | null;
     requestedDownloadConnectionCount: number | null;
     establishedDownloadConnectionCount: number | null;
     downloadMessageSizeKb: number | null;
@@ -683,6 +697,8 @@ export class SpeedTestEngine {
         testProtocol: params.testProtocol,
         downloadConnectionCount: params.establishedDownloadConnectionCount,
         uploadConnectionCount: params.establishedUploadConnectionCount,
+        initialDownloadConnectionCount: params.initialDownloadConnectionCount,
+        initialUploadConnectionCount: params.initialUploadConnectionCount,
         requestedDownloadConnectionCount: params.requestedDownloadConnectionCount,
         establishedDownloadConnectionCount: params.establishedDownloadConnectionCount,
         requestedUploadConnectionCount: params.requestedUploadConnectionCount,

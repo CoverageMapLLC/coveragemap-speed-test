@@ -42,7 +42,10 @@ class ThroughputSocketMock {
     }
 
     if (payload instanceof Uint8Array) {
+      // Queued until the next tick, as a socket reports it
+      this.bufferedAmount += payload.byteLength;
       setTimeout(() => {
+        this.bufferedAmount -= payload.byteLength;
         this.onmessage?.({ data: 'ACK' } as MessageEvent);
       }, 0);
     }
@@ -177,7 +180,7 @@ describe('throughput protocol runners', () => {
     expect(result.loadedLatency!.minLatency).toBeGreaterThan(0);
   });
 
-  it('requests a tripled download message size once 400 messages of the first batch arrived', async () => {
+  it('asks for the next batch at four times the size once 100 are due, before a speed is known', async () => {
     vi.useFakeTimers();
     ReplenishingDownloadSocketMock.commands = [];
     vi.stubGlobal('WebSocket', ReplenishingDownloadSocketMock as unknown as typeof WebSocket);
@@ -195,11 +198,11 @@ describe('throughput protocol runners', () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 500', 'START 192 500']);
+    expect(ReplenishingDownloadSocketMock.commands).toEqual(['START 64 200', 'START 256 200']);
 
     await vi.advanceTimersByTimeAsync(39);
     const result = await promise;
-    expect(result.bytes).toBe(64 * 1024 * 500);
+    expect(result.bytes).toBe(64 * 1024 * 200);
   });
 
   it('counts a message of the next batch that arrives before the first batch is done', async () => {
@@ -221,14 +224,14 @@ describe('throughput protocol runners', () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(ReentrantExtraFrameDownloadSocketMock.commands).toEqual([
-      'START 64 500',
-      'START 192 500',
+      'START 64 200',
+      'START 256 200',
     ]);
 
     await vi.advanceTimersByTimeAsync(39);
     const result = await promise;
-    // All 500 messages of the first batch plus the one 192 KB message of the second.
-    expect(result.bytes).toBe(64 * 1024 * 500 + 192 * 1024);
+    // All 200 messages of the first batch plus the one 256 KB message of the second.
+    expect(result.bytes).toBe(64 * 1024 * 200 + 256 * 1024);
   });
 
   it('completes download when loaded latency monitor receives no PONG samples', async () => {
